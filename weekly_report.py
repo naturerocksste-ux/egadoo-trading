@@ -34,7 +34,6 @@ def get_alpaca_data():
     """جلب بيانات الحساب من Alpaca"""
     try:
         from alpaca.trading.requests import GetOrdersRequest
-        from alpaca.trading.enums import OrderStatus
         
         client = TradingClient(
             api_key=ALPACA_API_KEY,
@@ -63,18 +62,21 @@ def get_alpaca_data():
                 'unrealized_plpc': float(pos.unrealized_plpc) * 100
             })
         
-        # الأوامر المنفذة خلال الأسبوع الماضي
+        # ✅ جلب جميع الأوامر (بدون filter)
         last_week = datetime.now() - timedelta(days=7)
         
-        # ✅ الطريقة الصحيحة للإصدار الحديث
-        orders_filter = GetOrdersRequest(
-            status=OrderStatus.CLOSED,
-            limit=100,
-            until=datetime.now(),
-            after=last_week
-        )
-        orders = client.get_orders(filter=orders_filter)
+        try:
+            orders_filter = GetOrdersRequest(
+                limit=100,
+                until=datetime.now(),
+                after=last_week
+            )
+            orders = client.get_orders(filter=orders_filter)
+        except:
+            # إذا فشل، جلب آخر 100 أمر
+            orders = client.get_orders()
         
+        # تصفية الأوامر المنفذة فقط
         filled_orders = [o for o in orders if o.status == 'filled']
         
         return {
