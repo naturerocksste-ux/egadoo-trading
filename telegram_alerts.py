@@ -89,19 +89,72 @@ def analyze_stock(ticker):
         print(f"خطأ في {ticker}: {e}")
         return None
 
-def test_alpaca():
+def force_close_all_positions():
+    """إغلاق جميع المراكز بالقوة عبر API"""
     if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
         return False, "مفاتيح Alpaca غير متاحة"
+    
     try:
         from alpaca.trading.client import TradingClient
-        client = TradingClient(api_key=ALPACA_API_KEY, secret_key=ALPACA_SECRET_KEY, paper=True)
-        account = client.get_account()
-        return True, f"متصل! الرصيد: ${float(account.cash):,.2f}"
+        from alpaca.trading.enums import OrderSide, TimeInForce
+        from alpaca.trading.requests import MarketOrderRequest
+        
+        client = TradingClient(
+            api_key=ALPACA_API_KEY,
+            secret_key=ALPACA_SECRET_KEY,
+            paper=True
+        )
+        
+        print("🔄 جاري إغلاق جميع المراكز...")
+        positions = client.get_all_positions()
+        
+        if not positions:
+            print("✅ لا توجد مراكز مفتوحة")
+            return True, "لا توجد مراكز"
+        
+        closed_count = 0
+        for position in positions:
+            try:
+                print(f"  🔄 إغلاق {position.symbol} ({position.qty} سهم)...")
+                
+                # تحديد جانب الإغلاق
+                side = OrderSide.SELL if position.side == 'long' else OrderSide.BUY
+                
+                # إنشاء أمر إغلاق
+                close_order = MarketOrderRequest(
+                    symbol=position.symbol,
+                    qty=abs(float(position.qty)),
+                    side=side,
+                    time_in_force=TimeInForce.DAY
+                )
+                
+                order = client.submit_order(order_data=close_order)
+                print(f"    ✅ أمر الإغلاق: {order.id}")
+                closed_count += 1
+                
+            except Exception as e:
+                print(f"    ❌ فشل إغلاق {position.symbol}: {e}")
+        
+        # انتظار تنفيذ الأوامر
+        print("  ⏳ انتظار 10 ثوانٍ لتنفيذ الأوامر...")
+        time.sleep(10)
+        
+        # إلغاء جميع الأوامر المعلقة
+        print("  🔄 إلغاء الأوامر المعلقة...")
+        try:
+            client.cancel_all_orders()
+            time.sleep(3)
+        except:
+            pass
+        
+        print(f"✅ تم إغلاق {closed_count} مركز")
+        return True, f"تم إغلاق {closed_count} مركز"
+        
     except Exception as e:
-        return False, f"فشل: {str(e)}"
+        return False, f"فشل الإغلاق: {str(e)}"
 
 def execute_simple_trade(ticker, side, entry_price):
-    """تنفيذ أمر دخول بسيط فقط (بدون Stop Loss/Take Profit تلقائي)"""
+    """تنفيذ أمر دخول بسيط"""
     if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
         return None, "مفاتيح Alpaca غير متاحة"
     
@@ -116,7 +169,7 @@ def execute_simple_trade(ticker, side, entry_price):
             paper=True
         )
         
-        # حساب أسعار مرجعية للرسالة فقط
+        # حساب أسعار مرجعية
         if side == "buy":
             suggested_sl = round(entry_price * (1 - STOP_LOSS_PERCENT / 100), 2)
             suggested_tp = round(entry_price * (1 + TAKE_PROFIT_PERCENT / 100), 2)
@@ -126,7 +179,6 @@ def execute_simple_trade(ticker, side, entry_price):
         
         print(f"🔹 تنفيذ {side} لـ {ticker} بسعر {entry_price}")
         
-        # أمر دخول بسيط فقط
         order_data = MarketOrderRequest(
             symbol=ticker,
             qty=TRADE_QTY,
@@ -151,12 +203,26 @@ def execute_simple_trade(ticker, side, entry_price):
 # ==========================================
 def main():
     print(f"🤖 بدء الفحص - {datetime.now()}")
-    send_telegram(f" <b>بدء الفحص الشامل (Simple Mode)...</b>\n⏰ {datetime.now().strftime('%H:%M')}")
+    send_telegram(f"🤖 <b>بدء الفحص الشامل (Auto-Close Mode)...</b>\n⏰ {datetime.now().strftime('%H:%M')}")
     
-    alpaca_ok, alpaca_msg = test_alpaca()
-    print(f"Alpaca: {alpaca_msg}")
-    if not alpaca_ok:
-        send_telegram(f"⚠️ <b>مشكلة Alpaca:</b>\n{alpaca_msg}")
+    # إغلاق جميع المراكز تلقائياً
+    print("\n🧹 الخطوة 1: إغلاق المراكز القديمة...")
+    send_telegram("🧹 <b>جاري إغلاق المراكز القديمة...</b>")
+    
+    success, msg = force_close_all_positions()
+    if success:
+        send_telegram(f"✅ {msg}")
+    else:
+        send_telegram(f"⚠️ {msg}")
+    
+    # اختبار الاتصال
+    alpaca_ok = True
+    alpaca_msg = "متصل"
+    if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
+        alpaca_ok = False
+        alpaca_msg = "مفاتيح غير متاحة"
+    
+    print(f"\nAlpaca: {alpaca_msg}")
     
     last_alerts = {}
     if os.path.exists(ALERTS_FILE):
@@ -192,7 +258,7 @@ def main():
                 
                 is_buy = "BUY" in result['signal']
                 is_strong = "STRONG" in result['signal']
-                emoji = "" if is_buy else "🔴"
+                emoji = "🟢" if is_buy else "🔴"
                 action = "شراء" if is_buy else "بيع"
                 strength = "قوية جداً" if is_strong else "متوسطة"
                 
@@ -250,7 +316,7 @@ Alpaca Dashboard → Positions → {ticker}
 ✅ إشارات: {signals}
 🤖 صفقات منفذة: {trades}
 ❌ أخطاء: {errors}
- Alpaca: {'متصل' if alpaca_ok else 'غير متصل'}
+ Alpaca: {alpaca_msg}
 ⚙️ SL={STOP_LOSS_PERCENT}%, TP={TAKE_PROFIT_PERCENT}%
 
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M')}
