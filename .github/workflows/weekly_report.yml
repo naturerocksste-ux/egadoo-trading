@@ -1,0 +1,32 @@
+name: Weekly Report
+
+on:
+  schedule:
+    # تشغيل كل جمعة الساعة 5:00 مساءً بتوقيت نيويورك (22:00 UTC)
+    - cron: '0 22 * * 5'
+  workflow_dispatch:  # يسمح بالتشغيل اليدوي
+
+jobs:
+  send-report:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+    
+    - name: Install dependencies
+      run: |
+        pip install alpaca-py requests
+    
+    - name: Generate and send weekly report
+      env:
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+        ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+      run: python weekly_report.py
