@@ -89,72 +89,72 @@ def analyze_stock(ticker):
         print(f"خطأ في {ticker}: {e}")
         return None
 
-def force_close_all_positions():
-    """إغلاق جميع المراكز بالقوة عبر API"""
-    if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
-        return False, "مفاتيح Alpaca غير متاحة"
+def deep_cleanup(client):
+    """
+    تنظيف عميق بالترتيب الصحيح:
+    1. إلغاء الأوامر (لتحرير الأسهم المحجوزة)
+    2. إغلاق المراكز
+    3. انتظار طويل
+    4. التحقق
+    """
+    print("🧹 بدء التنظيف العميق...")
     
+    # الخطوة 1: إلغاء جميع الأوامر المعلقة (مهم جداً!)
+    print("  1️⃣ إلغاء الأوامر المعلقة...")
     try:
-        from alpaca.trading.client import TradingClient
-        from alpaca.trading.enums import OrderSide, TimeInForce
-        from alpaca.trading.requests import MarketOrderRequest
-        
-        client = TradingClient(
-            api_key=ALPACA_API_KEY,
-            secret_key=ALPACA_SECRET_KEY,
-            paper=True
-        )
-        
-        print("🔄 جاري إغلاق جميع المراكز...")
-        positions = client.get_all_positions()
-        
-        if not positions:
-            print("✅ لا توجد مراكز مفتوحة")
-            return True, "لا توجد مراكز"
-        
-        closed_count = 0
-        for position in positions:
-            try:
-                print(f"  🔄 إغلاق {position.symbol} ({position.qty} سهم)...")
-                
-                # تحديد جانب الإغلاق
-                side = OrderSide.SELL if position.side == 'long' else OrderSide.BUY
-                
-                # إنشاء أمر إغلاق
-                close_order = MarketOrderRequest(
-                    symbol=position.symbol,
-                    qty=abs(float(position.qty)),
-                    side=side,
-                    time_in_force=TimeInForce.DAY
-                )
-                
-                order = client.submit_order(order_data=close_order)
-                print(f"    ✅ أمر الإغلاق: {order.id}")
-                closed_count += 1
-                
-            except Exception as e:
-                print(f"    ❌ فشل إغلاق {position.symbol}: {e}")
-        
-        # انتظار تنفيذ الأوامر
-        print("  ⏳ انتظار 10 ثوانٍ لتنفيذ الأوامر...")
-        time.sleep(10)
-        
-        # إلغاء جميع الأوامر المعلقة
-        print("  🔄 إلغاء الأوامر المعلقة...")
-        try:
-            client.cancel_all_orders()
-            time.sleep(3)
-        except:
-            pass
-        
-        print(f"✅ تم إغلاق {closed_count} مركز")
-        return True, f"تم إغلاق {closed_count} مركز"
-        
+        client.cancel_all_orders()
+        print("     ✅ تم إرسال طلب إلغاء جميع الأوامر")
+        print("     ⏳ انتظار 8 ثوانٍ لمعالجة الإلغاء...")
+        time.sleep(8)
     except Exception as e:
-        return False, f"فشل الإغلاق: {str(e)}"
+        print(f"     ⚠️ خطأ: {e}")
+    
+    # الخطوة 2: إغلاق جميع المراكز
+    print("  2️ إغلاق المراكز المفتوحة...")
+    try:
+        client.close_all_positions(cancel_orders=True)
+        print("     ✅ تم إرسال طلب إغلاق جميع المراكز")
+        print("     ⏳ انتظار 15 ثانية لتنفيذ الإغلاق...")
+        time.sleep(15)
+    except Exception as e:
+        print(f"     ⚠️ خطأ: {e}")
+    
+    # الخطوة 3: إلغاء أي أوامر جديدة نتجت عن الإغلاق
+    print("  3️⃣ إلغاء الأوامر المتبقية...")
+    try:
+        client.cancel_all_orders()
+        time.sleep(5)
+    except:
+        pass
+    
+    # الخطوة 4: التحقق من حالة الحساب
+    print("  4️ التحقق من حالة الحساب...")
+    try:
+        positions = client.get_all_positions()
+        orders = client.get_orders(status='open')
+        
+        print(f"     المراكز المفتوحة: {len(positions)}")
+        print(f"     الأوامر المعلقة: {len(orders)}")
+        
+        if len(positions) == 0 and len(orders) == 0:
+            print("     ✅ الحساب نظيف تماماً!")
+            return True
+        else:
+            print(f"     ⚠️ الحساب ليس نظيفاً بالكامل")
+            # محاولة أخيرة
+            if positions:
+                client.close_all_positions(cancel_orders=True)
+                time.sleep(10)
+            if orders:
+                client.cancel_all_orders()
+                time.sleep(5)
+            return True
+    except Exception as e:
+        print(f"     ❌ خطأ في التحقق: {e}")
+        return False
 
-def execute_simple_trade(ticker, side, entry_price):
-    """تنفيذ أمر دخول بسيط"""
+def execute_trade(ticker, side, entry_price):
+    """تنفيذ صفقة بعد تنظيف عميق"""
     if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
         return None, "مفاتيح Alpaca غير متاحة"
     
@@ -169,7 +169,11 @@ def execute_simple_trade(ticker, side, entry_price):
             paper=True
         )
         
-        # حساب أسعار مرجعية
+        # تنظيف عميق أولاً
+        print("🔹 بدء التنظيف العميق...")
+        deep_cleanup(client)
+        
+        # حساب الأسعار المرجعية
         if side == "buy":
             suggested_sl = round(entry_price * (1 - STOP_LOSS_PERCENT / 100), 2)
             suggested_tp = round(entry_price * (1 + TAKE_PROFIT_PERCENT / 100), 2)
@@ -203,26 +207,11 @@ def execute_simple_trade(ticker, side, entry_price):
 # ==========================================
 def main():
     print(f"🤖 بدء الفحص - {datetime.now()}")
-    send_telegram(f"🤖 <b>بدء الفحص الشامل (Auto-Close Mode)...</b>\n⏰ {datetime.now().strftime('%H:%M')}")
+    send_telegram(f" <b>بدء الفحص (Deep Clean Mode)...</b>\n⏰ {datetime.now().strftime('%H:%M')}")
     
-    # إغلاق جميع المراكز تلقائياً
-    print("\n🧹 الخطوة 1: إغلاق المراكز القديمة...")
-    send_telegram("🧹 <b>جاري إغلاق المراكز القديمة...</b>")
-    
-    success, msg = force_close_all_positions()
-    if success:
-        send_telegram(f"✅ {msg}")
-    else:
-        send_telegram(f"⚠️ {msg}")
-    
-    # اختبار الاتصال
     alpaca_ok = True
-    alpaca_msg = "متصل"
     if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
         alpaca_ok = False
-        alpaca_msg = "مفاتيح غير متاحة"
-    
-    print(f"\nAlpaca: {alpaca_msg}")
     
     last_alerts = {}
     if os.path.exists(ALERTS_FILE):
@@ -258,31 +247,31 @@ def main():
                 
                 is_buy = "BUY" in result['signal']
                 is_strong = "STRONG" in result['signal']
-                emoji = "🟢" if is_buy else "🔴"
+                emoji = "" if is_buy else "🔴"
                 action = "شراء" if is_buy else "بيع"
                 strength = "قوية جداً" if is_strong else "متوسطة"
                 
                 msg = f"""
 {emoji} <b>إشارة {action} {strength}!</b>
 
-📌 <b>{result['ticker']}</b>
-💰 السعر: ${result['price']:.2f}
+ <b>{result['ticker']}</b>
+ السعر: ${result['price']:.2f}
 📊 RSI: {result['rsi']:.1f}
 🛡️ الدعم: ${result['support']:.2f}
-🚧 المقاومة: ${result['resistance']:.2f}
+ المقاومة: ${result['resistance']:.2f}
 """
                 send_telegram(msg)
                 
                 if is_strong and ticker in ALPACA_TRADABLE and alpaca_ok:
-                    send_telegram(f"🤖 <b>جاري تنفيذ صفقة لـ {ticker}...</b>")
+                    send_telegram(f"🤖 <b>جاري تنفيذ صفقة لـ {ticker} (مع تنظيف عميق)...</b>")
                     
-                    trade_result, error = execute_simple_trade(
+                    trade_result, error = execute_trade(
                         ticker, "buy" if is_buy else "sell", result['price']
                     )
                     
                     if error:
                         errors += 1
-                        send_telegram(f"❌ فشل {ticker}:\n{error[:200]}")
+                        send_telegram(f"❌ فشل {ticker}:\n{error[:300]}")
                     else:
                         trades += 1
                         order = trade_result['order']
@@ -308,15 +297,15 @@ Alpaca Dashboard → Positions → {ticker}
         except Exception as e:
             errors += 1
             print(f"❌ خطأ في {ticker}: {e}")
-            send_telegram(f"❌ خطأ في {ticker}:\n{str(e)[:150]}")
+            send_telegram(f" خطأ في {ticker}:\n{str(e)[:150]}")
     
     summary = f"""
 📊 <b>ملخص الفحص:</b>
 
 ✅ إشارات: {signals}
-🤖 صفقات منفذة: {trades}
+ صفقات منفذة: {trades}
 ❌ أخطاء: {errors}
- Alpaca: {alpaca_msg}
+ Alpaca: {'متصل' if alpaca_ok else 'غير متصل'}
 ⚙️ SL={STOP_LOSS_PERCENT}%, TP={TAKE_PROFIT_PERCENT}%
 
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M')}
