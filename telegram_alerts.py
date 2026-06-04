@@ -7,21 +7,14 @@ import os
 from datetime import datetime
 
 # ==========================================
-# إعدادات تيليجرام و Alpaca (من GitHub Secrets)
+# إعدادات تيليجرام و Alpaca
 # ==========================================
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')
 ALPACA_API_KEY = os.environ.get('ALPACA_API_KEY', '')
 ALPACA_SECRET_KEY = os.environ.get('ALPACA_SECRET_KEY', '')
 
-# ==========================================
-# قائمة الأسهم للمراقبة
-# ==========================================
-WATCHLIST = [
-    "AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "SPY",
-    "BTC-USD", "ETH-USD", "GC=F", "SI=F", "^GSPC"
-]
-
+WATCHLIST = ["AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "SPY", "BTC-USD", "ETH-USD"]
 ALERTS_FILE = "last_alerts.json"
 
 def load_last_alerts():
@@ -39,19 +32,30 @@ def send_telegram_message(message):
     try:
         response = requests.post(url, json=payload, timeout=10)
         return response.status_code == 200
-    except: return False
+    except Exception as e:
+        print(f"خطأ تيليجرام: {e}")
+        return False
+
+def test_alpaca_connection():
+    """اختبار الاتصال بـ Alpaca"""
+    if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
+        return False, "مفاتيح Alpaca غير متاحة في GitHub Secrets"
+    
+    try:
+        from alpaca.trading.client import TradingClient
+        client = TradingClient(api_key=ALPACA_API_KEY, secret_key=ALPACA_SECRET_KEY, paper=True)
+        account = client.get_account()
+        return True, f"الاتصال ناجح! الرصيد: ${float(account.cash):,.2f}"
+    except Exception as e:
+        return False, f"فشل الاتصال: {str(e)}"
 
 def execute_alpaca_trade(ticker, side, qty):
-    """دالة تنفيذ الصفقة في Alpaca"""
-    if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
-        return None, "مفاتيح Alpaca غير متاحة"
-    
+    """تنفيذ الصفقة في Alpaca"""
     try:
         from alpaca.trading.client import TradingClient
         from alpaca.trading.requests import MarketOrderRequest
         from alpaca.trading.enums import OrderSide, TimeInForce
         
-        # paper=True تعني أموال افتراضية
         client = TradingClient(api_key=ALPACA_API_KEY, secret_key=ALPACA_SECRET_KEY, paper=True)
         
         order_data = MarketOrderRequest(
@@ -88,68 +92,64 @@ def analyze_stock(ticker):
         dist_to_resistance = ((resistance - current_price) / current_price) * 100
         
         signal = None
-        # ننفذ الصفقة فقط على الإشارات القوية جداً لتجنب الضوضاء
+        signal_strength = None
+        
+        # شروط صارمة جداً (قوية)
         if dist_to_support <= 2.0 and current_rsi < 30:
             signal = "buy_strong"
+            signal_strength = "قوية جداً"
         elif dist_to_resistance <= 2.0 and current_rsi > 70:
             signal = "sell_strong"
+            signal_strength = "قوية جداً"
+        # شروط متوسطة (للتجربة فقط - سننفذها)
+        elif dist_to_support <= 3.0 and current_rsi < 35:
+            signal = "buy_medium"
+            signal_strength = "متوسطة"
+        elif dist_to_resistance <= 3.0 and current_rsi > 65:
+            signal = "sell_medium"
+            signal_strength = "متوسطة"
             
         if signal:
-            return {'ticker': ticker, 'price': current_price, 'signal': signal, 'support': support, 'resistance': resistance, 'rsi': current_rsi}
+            return {
+                'ticker': ticker, 
+                'price': current_price, 
+                'signal': signal,
+                'signal_strength': signal_strength,
+                'support': support, 
+                'resistance': resistance, 
+                'rsi': current_rsi,
+                'dist_to_support': dist_to_support,
+                'dist_to_resistance': dist_to_resistance
+            }
         return None
-    except: return None
+    except Exception as e:
+        print(f"خطأ في تحليل {ticker}: {e}")
+        return None
 
 def main():
     print(f"🤖 بدء الفحص - {datetime.now()}")
-    if not TELEGRAM_BOT_TOKEN:
-        print("❌ مفاتيح تيليجرام غير متاحة")
-        return
+    
+    # اختبار الاتصال بـ Alpaca أولاً
+    alpaca_ok, alpaca_msg = test_alpaca_connection()
+    print(f"حالة Alpaca: {alpaca_msg}")
+    
+    if not alpaca_ok:
+        send_telegram_message(f"❌ <b>مشكلة في Alpaca:</b>\n{alpaca_msg}\n\nلن يتم تنفيذ صفقات حتى يتم الإصلاح.")
     
     last_alerts = load_last_alerts()
     new_alerts = {}
+    signals_found = 0
+    trades_executed = 0
     
     for ticker in WATCHLIST:
-        print(f" فحص {ticker}...")
+        print(f"فحص {ticker}...")
         result = analyze_stock(ticker)
         
         if result:
+            signals_found += 1
+            print(f"✅ إشارة في {ticker}: {result['signal_strength']}")
+            
             alert_key = f"{ticker}_{result['signal']}"
             if alert_key in last_alerts:
                 last_time = datetime.fromisoformat(last_alerts[alert_key])
-                hours_since = (datetime.now() - last_time).total_seconds() / 3600
-                if hours_since < 6: continue # تنبيه كل 6 ساعات لنفس السهم
-            
-            # تحديد نوع الرسالة والتنفيذ
-            is_buy = result['signal'] == "buy_strong"
-            action_text = "شراء قوية 🔥" if is_buy else "بيع قوية ⚠️"
-            trade_side = "buy" if is_buy else "sell"
-            
-            message = f"""
-🚨 <b>إشارة {action_text} + تنفيذ تلقائي!</b>
-
-📌 <b>{result['ticker']}</b>
-💰 السعر: ${result['price']:.2f}
-📊 RSI: {result['rsi']:.1f}
-
-🤖 <b>جاري تنفيذ الصفقة في Alpaca...</b>
-"""
-            
-            # إرسال التنبيه أولاً
-            send_telegram_message(message)
-            
-            # تنفيذ الصفقة (كمية صغيرة للتجربة: سهم واحد)
-            order, error = execute_alpaca_trade(result['ticker'], trade_side, 1)
-            
-            if error:
-                send_telegram_message(f"❌ فشل تنفيذ {result['ticker']}: {error}")
-            else:
-                send_telegram_message(f"✅ <b>تم تنفيذ صفقة {result['ticker']} بنجاح!</b>\nرقم الطلب: {order.id}\nالكمية: {order.qty}")
-            
-            new_alerts[alert_key] = datetime.now().isoformat()
-    
-    if new_alerts:
-        save_last_alerts(new_alerts)
-    print("✅ انتهى الفحص")
-
-if __name__ == "__main__":
-    main()
+                hours
