@@ -140,19 +140,18 @@ def cancel_all_open_orders(client, ticker=None):
         print(f"⚠️ خطأ في إلغاء الأوامر: {e}")
         return 0
 
-def execute_trade_with_sl_tp(ticker, side, entry_price):
+def execute_simple_trade(ticker, side, entry_price):
     """
-    تنفيذ صفقة مع وقف خسارة وجني أرباح
-    مع إلغاء شامل للأوامر المعلقة
+    تنفيذ أمر دخول بسيط فقط (بدون أوامر معلقة)
+    إدارة المخاطر تتم يدوياً من Alpaca Dashboard
     """
     if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
         return None, "مفاتيح Alpaca غير متاحة"
     
     try:
         from alpaca.trading.client import TradingClient
-        from alpaca.trading.requests import MarketOrderRequest, StopOrderRequest, LimitOrderRequest
+        from alpaca.trading.requests import MarketOrderRequest
         from alpaca.trading.enums import OrderSide, TimeInForce
-        import time
         
         client = TradingClient(
             api_key=ALPACA_API_KEY,
@@ -160,73 +159,49 @@ def execute_trade_with_sl_tp(ticker, side, entry_price):
             paper=True
         )
         
-        # ✅ الخطوة 1: إلغاء جميع الأوامر المعلقة (لجميع الأسهم)
-        print("🧹 جاري إلغاء جميع الأوامر المعلقة...")
-        cancelled = cancel_all_open_orders(client)
+        # إلغاء جميع الأوامر المعلقة أولاً
+        print("🧹 جاري إلغاء الأوامر المعلقة...")
+        try:
+            open_orders = client.get_orders(status='open')
+            for order in open_orders:
+                client.cancel_order(order.id)
+                print(f"  تم إلغاء: {order.id}")
+            import time
+            time.sleep(2)
+        except Exception as e:
+            print(f"⚠️ خطأ في الإلغاء: {e}")
         
-        if cancelled > 0:
-            print(f" انتظار {cancelled} ثانية لمعالجة الإلغاء...")
-            time.sleep(3)  # انتظار أطول للتأكد
-        
-        # حساب الأسعار
+        # حساب أسعار مرجعية للرسالة فقط
         if side == "buy":
-            stop_loss_price = round(entry_price * (1 - STOP_LOSS_PERCENT / 100), 2)
-            take_profit_price = round(entry_price * (1 + TAKE_PROFIT_PERCENT / 100), 2)
+            suggested_sl = round(entry_price * (1 - STOP_LOSS_PERCENT / 100), 2)
+            suggested_tp = round(entry_price * (1 + TAKE_PROFIT_PERCENT / 100), 2)
         else:
-            stop_loss_price = round(entry_price * (1 + STOP_LOSS_PERCENT / 100), 2)
-            take_profit_price = round(entry_price * (1 - TAKE_PROFIT_PERCENT / 100), 2)
+            suggested_sl = round(entry_price * (1 + STOP_LOSS_PERCENT / 100), 2)
+            suggested_tp = round(entry_price * (1 - TAKE_PROFIT_PERCENT / 100), 2)
         
         print(f"جاري تنفيذ {side} لـ {ticker} بسعر {entry_price}")
-        print(f"وقف الخسارة: {stop_loss_price}, جني الأرباح: {take_profit_price}")
         
-        # 2. أمر الشراء/البيع الرئيسي
-        entry_order = MarketOrderRequest(
+        # تنفيذ أمر دخول واحد فقط
+        order_data = MarketOrderRequest(
             symbol=ticker,
             qty=TRADE_QTY,
             side=OrderSide.BUY if side == "buy" else OrderSide.SELL,
             time_in_force=TimeInForce.DAY
         )
-        entry_result = client.submit_order(order_data=entry_order)
-        print(f"✅ تم تنفيذ أمر الدخول: {entry_result.id}")
-        
-        # انتظار قصير قبل وضع الأوامر المعلقة
-        time.sleep(1)
-        
-        # 3. أمر وقف الخسارة
-        sl_side = OrderSide.SELL if side == "buy" else OrderSide.BUY
-        stop_loss_order = StopOrderRequest(
-            symbol=ticker,
-            qty=TRADE_QTY,
-            side=sl_side,
-            stop_price=stop_loss_price,
-            time_in_force=TimeInForce.GTC
-        )
-        sl_result = client.submit_order(order_data=stop_loss_order)
-        print(f"✅ تم وضع وقف الخسارة: {sl_result.id}")
-        
-        # 4. أمر جني الأرباح
-        tp_side = OrderSide.SELL if side == "buy" else OrderSide.BUY
-        take_profit_order = LimitOrderRequest(
-            symbol=ticker,
-            qty=TRADE_QTY,
-            side=tp_side,
-            limit_price=take_profit_price,
-            time_in_force=TimeInForce.GTC
-        )
-        tp_result = client.submit_order(order_data=take_profit_order)
-        print(f"✅ تم وضع جني الأرباح: {tp_result.id}")
+        order = client.submit_order(order_data=order_data)
+        print(f"✅ تم التنفيذ: {order.id}")
         
         return {
-            'entry_order': entry_result,
-            'stop_loss_order': sl_result,
-            'take_profit_order': tp_result,
-            'stop_loss': stop_loss_price,
-            'take_profit': take_profit_price
+            'order': order,
+            'suggested_sl': suggested_sl,
+            'suggested_tp': suggested_tp
         }, None
         
     except Exception as e:
+        import traceback
         error_detail = traceback.format_exc()
         return None, f"{str(e)}\n\n{error_detail}"
+        
 # ==========================================
 # 5. المحرك الرئيسي
 # ==========================================
