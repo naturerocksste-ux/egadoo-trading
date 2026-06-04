@@ -3,6 +3,7 @@ import pandas as pd
 import requests
 import json
 import os
+import traceback
 from datetime import datetime
 
 # ==========================================
@@ -14,11 +15,11 @@ ALPACA_API_KEY = os.environ.get('ALPACA_API_KEY', '')
 ALPACA_SECRET_KEY = os.environ.get('ALPACA_SECRET_KEY', '')
 
 # ==========================================
-# 2. إعدادات إدارة المخاطر (قابلة للتعديل)
+# 2. إعدادات إدارة المخاطر
 # ==========================================
-STOP_LOSS_PERCENT = 3.0    # وقف الخسارة: 3%
-TAKE_PROFIT_PERCENT = 6.0  # جني الأرباح: 6%
-TRADE_QTY = 1              # عدد الأسهم في كل صفقة
+STOP_LOSS_PERCENT = 3.0
+TAKE_PROFIT_PERCENT = 6.0
+TRADE_QTY = 1
 
 # ==========================================
 # 3. قوائم المراقبة
@@ -36,163 +37,14 @@ ALPACA_TRADABLE = ["AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "SPY", "BTC-USD", "ET
 ALERTS_FILE = "last_alerts.json"
 
 # ==========================================
-# 4. الدوال المساعدة
+# 4. دوال مساعدة
 # ==========================================
 def send_telegram_message(message):
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: return False
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
+    """إرسال رسالة تيليجرام مع حماية كاملة"""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("❌ مفاتيح تيليجرام غير متاحة")
+        return False
     try:
-        requests.post(url, json=payload, timeout=10)
-        return True
-    except: return False
-
-def calculate_rsi(df, period=14):
-    try:
-        delta = df['Close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-        rs = gain / loss
-        return 100 - (100 / (1 + rs))
-    except: return None
-
-def analyze_stock(ticker):
-    try:
-        df = yf.Ticker(ticker).history(period="60d", interval="1d")
-        if df.empty or len(df) < 20: return None
-        
-        current_price = float(df['Close'].iloc[-1])
-        support = float(df['Low'].rolling(window=20).min().iloc[-1])
-        resistance = float(df['High'].rolling(window=20).max().iloc[-1])
-        
-        rsi_series = calculate_rsi(df)
-        if rsi_series is None or rsi_series.empty: return None
-        current_rsi = float(rsi_series.iloc[-1])
-        
-        dist_to_support = ((current_price - support) / current_price) * 100
-        dist_to_resistance = ((resistance - current_price) / current_price) * 100
-        
-        signal = None
-        if dist_to_support <= 2.5 and current_rsi < 35:
-            signal = "STRONG_BUY"
-        elif dist_to_resistance <= 2.5 and current_rsi > 65:
-            signal = "STRONG_SELL"
-        elif dist_to_support <= 4.0 and current_rsi < 40:
-            signal = "BUY_WATCH"
-        elif dist_to_resistance <= 4.0 and current_rsi > 60:
-            signal = "SELL_WATCH"
-            
-        if signal:
-            return {
-                'ticker': ticker, 'price': current_price, 'signal': signal,
-                'support': support, 'resistance': resistance, 'rsi': current_rsi
-            }
-        return None
-    except Exception as e:
-        print(f"خطأ في تحليل {ticker}: {e}")
-        return None
-
-def execute_bracket_order(ticker, side, entry_price):
-    """
-    تنفيذ أمر Bracket (شراء + وقف خسارة + جني أرباح)
-    """
-    if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
-        return None, "مفاتيح Alpaca غير متاحة"
-    
-    try:
-        from alpaca.trading.client import TradingClient
-        from alpaca.trading.requests import MarketOrderRequest, StopLossRequest, TakeProfitRequest
-        from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
-        
-        client = TradingClient(
-            api_key=ALPACA_API_KEY, 
-            secret_key=ALPACA_SECRET_KEY, 
-            paper=True
-        )
-        
-        # حساب أسعار وقف الخسارة وجني الأرباح
-        if side == "buy":
-            stop_loss_price = round(entry_price * (1 - STOP_LOSS_PERCENT / 100), 2)
-            take_profit_price = round(entry_price * (1 + TAKE_PROFIT_PERCENT / 100), 2)
-        else:  # sell
-            stop_loss_price = round(entry_price * (1 + STOP_LOSS_PERCENT / 100), 2)
-            take_profit_price = round(entry_price * (1 - TAKE_PROFIT_PERCENT / 100), 2)
-        
-        # إنشاء أمر Bracket
-        order_data = MarketOrderRequest(
-            symbol=ticker,
-            qty=TRADE_QTY,
-            side=OrderSide.BUY if side == "buy" else OrderSide.SELL,
-            time_in_force=TimeInForce.DAY,
-            order_class=OrderClass.BRACKET,
-            stop_loss=StopLossRequest(stop_price=stop_loss_price),
-            take_profit=TakeProfitRequest(limit_price=take_profit_price)
-        )
-        
-        order = client.submit_order(order_data=order_data)
-        
-        return {
-            'order': order,
-            'stop_loss': stop_loss_price,
-            'take_profit': take_profit_price
-        }, None
-        
-    except Exception as e:
-        return None, str(e)
-
-# ==========================================
-# 5. المحرك الرئيسي
-# ==========================================
-def main():
-    print(f" بدء الفحص - {datetime.now()}")
-    send_telegram_message(f"🤖 <b>بدء الفحص الشامل...</b>\n⏰ {datetime.now().strftime('%H:%M')}")
-    
-    last_alerts = {}
-    if os.path.exists(ALERTS_FILE):
-        try:
-            with open(ALERTS_FILE, 'r') as f: last_alerts = json.load(f)
-        except: pass
-    
-    new_alerts = {}
-    signals_count = 0
-    trades_count = 0
-    
-    for ticker in GLOBAL_WATCHLIST:
-        print(f"فحص {ticker}...")
-        result = analyze_stock(ticker)
-        
-        if result:
-            signals_count += 1
-            alert_key = f"{ticker}_{result['signal']}"
-            
-            if alert_key in last_alerts:
-                try:
-                    last_time = datetime.fromisoformat(last_alerts[alert_key])
-                    if (datetime.now() - last_time).total_seconds() < 43200:
-                        continue
-                except: pass
-            
-            is_buy = "BUY" in result['signal']
-            is_strong = "STRONG" in result['signal']
-            emoji = "🟢" if is_buy else "🔴"
-            action_text = "شراء" if is_buy else "بيع"
-            strength_text = "قوية جداً" if is_strong else "متوسطة"
-            
-            message = f"""
-{emoji} <b>إشارة {action_text} {strength_text}!</b>
-
- <b>{result['ticker']}</b>
- السعر: ${result['price']:.2f}
-📊 RSI: {result['rsi']:.1f}
-🛡️ الدعم: ${result['support']:.2f}
- المقاومة: ${result['resistance']:.2f}
-"""
-            send_telegram_message(message)
-            
-            # التنفيذ التلقائي مع وقف الخسارة وجني الأرباح
-            if is_strong and ticker in ALPACA_TRADABLE:
-                send_telegram_message(f"🤖 <b>جاري تنفيذ صفقة Bracket لـ {ticker}...</b>")
-                
-                result_trade, error = execute_bracket_order(
-                    ticker, 
-                    "buy
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
+        response = requests.post(url
