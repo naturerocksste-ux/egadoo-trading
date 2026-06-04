@@ -112,10 +112,38 @@ def test_alpaca_connection():
     except Exception as e:
         return False, f"فشل الاتصال: {str(e)}"
 
+def cancel_all_open_orders(client, ticker=None):
+    """إلغاء جميع الأوامر المعلقة (للسهم المحدد أو جميع الأسهم)"""
+    try:
+        if ticker:
+            open_orders = client.get_orders(status='open', symbols=[ticker])
+        else:
+            open_orders = client.get_orders(status='open')
+        
+        cancelled_count = 0
+        for order in open_orders:
+            try:
+                client.cancel_order(order.id)
+                cancelled_count += 1
+                print(f"  تم إلغاء أمر: {order.id} ({order.symbol})")
+            except Exception as e:
+                print(f"  فشل إلغاء أمر {order.id}: {e}")
+        
+        if cancelled_count > 0:
+            print(f"✅ تم إلغاء {cancelled_count} أمر معلق")
+            # انتظار قصير للتأكد من معالجة الإلغاء
+            import time
+            time.sleep(2)
+        
+        return cancelled_count
+    except Exception as e:
+        print(f"⚠️ خطأ في إلغاء الأوامر: {e}")
+        return 0
+
 def execute_trade_with_sl_tp(ticker, side, entry_price):
     """
     تنفيذ صفقة مع وقف خسارة وجني أرباح
-    مع إلغاء الأوامر المعلقة السابقة أولاً
+    مع إلغاء شامل للأوامر المعلقة
     """
     if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
         return None, "مفاتيح Alpaca غير متاحة"
@@ -124,6 +152,7 @@ def execute_trade_with_sl_tp(ticker, side, entry_price):
         from alpaca.trading.client import TradingClient
         from alpaca.trading.requests import MarketOrderRequest, StopOrderRequest, LimitOrderRequest
         from alpaca.trading.enums import OrderSide, TimeInForce
+        import time
         
         client = TradingClient(
             api_key=ALPACA_API_KEY,
@@ -131,19 +160,13 @@ def execute_trade_with_sl_tp(ticker, side, entry_price):
             paper=True
         )
         
-        # ✅ الخطوة 1: إلغاء جميع الأوامر المعلقة لهذا السهم
-        print(f"جاري إلغاء الأوامر المعلقة لـ {ticker}...")
-        try:
-            open_orders = client.get_orders(status='open', symbols=[ticker])
-            if open_orders:
-                for order in open_orders:
-                    client.cancel_order(order.id)
-                    print(f"  تم إلغاء أمر: {order.id}")
-                print(f"✅ تم إلغاء {len(open_orders)} أمر معلق")
-            else:
-                print("لا توجد أوامر معلقة")
-        except Exception as e:
-            print(f"⚠️ خطأ في إلغاء الأوامر: {e}")
+        # ✅ الخطوة 1: إلغاء جميع الأوامر المعلقة (لجميع الأسهم)
+        print("🧹 جاري إلغاء جميع الأوامر المعلقة...")
+        cancelled = cancel_all_open_orders(client)
+        
+        if cancelled > 0:
+            print(f" انتظار {cancelled} ثانية لمعالجة الإلغاء...")
+            time.sleep(3)  # انتظار أطول للتأكد
         
         # حساب الأسعار
         if side == "buy":
@@ -165,6 +188,9 @@ def execute_trade_with_sl_tp(ticker, side, entry_price):
         )
         entry_result = client.submit_order(order_data=entry_order)
         print(f"✅ تم تنفيذ أمر الدخول: {entry_result.id}")
+        
+        # انتظار قصير قبل وضع الأوامر المعلقة
+        time.sleep(1)
         
         # 3. أمر وقف الخسارة
         sl_side = OrderSide.SELL if side == "buy" else OrderSide.BUY
