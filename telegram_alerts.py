@@ -33,7 +33,6 @@ GLOBAL_WATCHLIST = [
     "GC=F", "SI=F"
 ]
 
-# الأسهم الأمريكية فقط (المدعومة في Alpaca)
 ALPACA_TRADABLE = ["AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "SPY"]
 
 ALERTS_FILE = "last_alerts.json"
@@ -113,17 +112,20 @@ def test_alpaca_connection():
     except Exception as e:
         return False, f"فشل الاتصال: {str(e)}"
 
-def execute_simple_trade(ticker, side, entry_price):
+def execute_oco_trade(ticker, side, entry_price):
     """
-    تنفيذ أمر دخول بسيط فقط (بدون أوامر معلقة)
+    تنفيذ صفقة باستخدام OCO Order (One Cancels Other)
+    - أمر دخول فوري
+    - Stop Loss + Take Profit معلقين
+    - إذا نُفذ أحدهما، يُلغى الآخر تلقائياً
     """
     if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
         return None, "مفاتيح Alpaca غير متاحة"
     
     try:
         from alpaca.trading.client import TradingClient
-        from alpaca.trading.requests import MarketOrderRequest
-        from alpaca.trading.enums import OrderSide, TimeInForce
+        from alpaca.trading.requests import MarketOrderRequest, StopLossRequest, TakeProfitRequest
+        from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
         
         client = TradingClient(
             api_key=ALPACA_API_KEY,
@@ -131,41 +133,36 @@ def execute_simple_trade(ticker, side, entry_price):
             paper=True
         )
         
-        # إلغاء جميع الأوامر المعلقة أولاً
-        print("🧹 جاري إلغاء الأوامر المعلقة...")
-        try:
-            open_orders = client.get_orders(status='open')
-            for order in open_orders:
-                client.cancel_order(order.id)
-                print(f"  تم إلغاء: {order.id}")
-            time.sleep(2)
-        except Exception as e:
-            print(f"⚠️ خطأ في الإلغاء: {e}")
-        
-        # حساب أسعار مرجعية
+        # حساب الأسعار
         if side == "buy":
-            suggested_sl = round(entry_price * (1 - STOP_LOSS_PERCENT / 100), 2)
-            suggested_tp = round(entry_price * (1 + TAKE_PROFIT_PERCENT / 100), 2)
+            stop_loss_price = round(entry_price * (1 - STOP_LOSS_PERCENT / 100), 2)
+            take_profit_price = round(entry_price * (1 + TAKE_PROFIT_PERCENT / 100), 2)
         else:
-            suggested_sl = round(entry_price * (1 + STOP_LOSS_PERCENT / 100), 2)
-            suggested_tp = round(entry_price * (1 - TAKE_PROFIT_PERCENT / 100), 2)
+            stop_loss_price = round(entry_price * (1 + STOP_LOSS_PERCENT / 100), 2)
+            take_profit_price = round(entry_price * (1 - TAKE_PROFIT_PERCENT / 100), 2)
         
-        print(f"جاري تنفيذ {side} لـ {ticker} بسعر {entry_price}")
+        print(f"جاري تنفيذ OCO لـ {ticker} بسعر {entry_price}")
+        print(f"Stop Loss: {stop_loss_price}, Take Profit: {take_profit_price}")
         
-        # تنفيذ أمر دخول واحد فقط
+        # إنشاء أمر OCO (دخول + Stop Loss + Take Profit في نفس الوقت)
         order_data = MarketOrderRequest(
             symbol=ticker,
             qty=TRADE_QTY,
             side=OrderSide.BUY if side == "buy" else OrderSide.SELL,
-            time_in_force=TimeInForce.DAY
+            time_in_force=TimeInForce.DAY,
+            order_class=OrderClass.BRACKET,  # Bracket = OCO مدمج
+            stop_loss=StopLossRequest(stop_price=stop_loss_price),
+            take_profit=TakeProfitRequest(limit_price=take_profit_price)
         )
+        
+        # تنفيذ الأمر
         order = client.submit_order(order_data=order_data)
-        print(f"✅ تم التنفيذ: {order.id}")
+        print(f"✅ تم تنفيذ OCO: {order.id}")
         
         return {
             'order': order,
-            'suggested_sl': suggested_sl,
-            'suggested_tp': suggested_tp
+            'stop_loss': stop_loss_price,
+            'take_profit': take_profit_price
         }, None
         
     except Exception as e:
@@ -177,7 +174,7 @@ def execute_simple_trade(ticker, side, entry_price):
 # ==========================================
 def main():
     print(f"🤖 بدء الفحص - {datetime.now()}")
-    send_telegram_message(f" <b>بدء الفحص الشامل...</b>\n⏰ {datetime.now().strftime('%H:%M')}")
+    send_telegram_message(f"🤖 <b>بدء الفحص الشامل (OCO Mode)...</b>\n⏰ {datetime.now().strftime('%H:%M')}")
     
     alpaca_ok, alpaca_msg = test_alpaca_connection()
     print(f"حالة Alpaca: {alpaca_msg}")
@@ -221,7 +218,7 @@ def main():
                 is_strong = "STRONG" in result['signal']
                 emoji = "🟢" if is_buy else "🔴"
                 action_text = "شراء" if is_buy else "بيع"
-                strength_text = "قوية جداً" if is_strong else "متوسطة"
+                strength_text = "قوية جداً (OCO)" if is_strong else "متوسطة"
                 
                 message = f"""
 {emoji} <b>إشارة {action_text} {strength_text}!</b>
@@ -234,11 +231,11 @@ def main():
 """
                 send_telegram_message(message)
                 
-                # التنفيذ التلقائي
+                # التنفيذ التلقائي مع OCO
                 if is_strong and ticker in ALPACA_TRADABLE and alpaca_ok:
-                    send_telegram_message(f" <b>جاري تنفيذ صفقة لـ {ticker}...</b>")
+                    send_telegram_message(f"🤖 <b>جاري تنفيذ صفقة OCO لـ {ticker}...</b>")
                     
-                    result_trade, error = execute_simple_trade(
+                    result_trade, error = execute_oco_trade(
                         ticker,
                         "buy" if is_buy else "sell",
                         result['price']
@@ -252,19 +249,18 @@ def main():
                         order = result_trade['order']
                         
                         success_msg = f"""
-✅ <b>تم التنفيذ بنجاح!</b>
+✅ <b>تم تنفيذ صفقة OCO بنجاح!</b>
 
 📌 الرمز: {ticker}
- سعر الدخول: ${result['price']:.2f}
+💰 سعر الدخول: ${result['price']:.2f}
 📦 الكمية: {TRADE_QTY}
 🔖 رقم الطلب: {order.id}
 
-⚙️ <b>إدارة المخاطر (مقترحة):</b>
-🛑 وقف الخسارة: ${result_trade['suggested_sl']:.2f} (-{STOP_LOSS_PERCENT}%)
-🎯 جني الأرباح: ${result_trade['suggested_tp']:.2f} (+{TAKE_PROFIT_PERCENT}%)
+🛡️ <b>إدارة المخاطر التلقائية (OCO):</b>
+🛑 وقف الخسارة: ${result_trade['stop_loss']:.2f} (-{STOP_LOSS_PERCENT}%)
+ جني الأرباح: ${result_trade['take_profit']:.2f} (+{TAKE_PROFIT_PERCENT}%)
 
-👉 <b>ضع وقف الخسارة وجني الأرباح يدوياً من:</b>
-Alpaca Dashboard → Positions → {ticker}
+✨ <b>إذا نُفذ أحدهما، يُلغى الآخر تلقائياً!</b>
 """
                         send_telegram_message(success_msg)
                 
@@ -275,15 +271,15 @@ Alpaca Dashboard → Positions → {ticker}
             send_telegram_message(f"❌ خطأ في {ticker}:\n{str(e)[:150]}")
     
     summary = f"""
- <b>ملخص الفحص:</b>
+📊 <b>ملخص الفحص:</b>
 
 ✅ إشارات: {signals_count}
-🤖 صفقات منفذة: {trades_count}
- أخطاء: {errors_count}
+🤖 صفقات OCO منفذة: {trades_count}
+❌ أخطاء: {errors_count}
 🔌 Alpaca: {'متصل' if alpaca_ok else 'غير متصل'}
 ⚙️ SL={STOP_LOSS_PERCENT}%, TP={TAKE_PROFIT_PERCENT}%
 
-⏰ {datetime.now().strftime('%Y-%m-%d %H:%M')}
+ {datetime.now().strftime('%Y-%m-%d %H:%M')}
 """
     send_telegram_message(summary)
     
