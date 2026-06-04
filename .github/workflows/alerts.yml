@@ -2,9 +2,8 @@ name: Trading Alerts
 
 on:
   schedule:
-    # تشغيل تلقائي كل 15 دقيقة
     - cron: '*/15 * * * *'
-  workflow_dispatch:  # يسمح بالتشغيل اليدوي
+  workflow_dispatch:
 
 jobs:
   send-alerts:
@@ -21,10 +20,13 @@ jobs:
     
     - name: Install dependencies
       run: |
-        pip install yfinance pandas numpy requests
+        # تثبيت مكتبات التحليل والتنفيذ التلقائي
+        pip install yfinance pandas numpy requests alpaca-py
     
     - name: Run alerts script
       env:
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+        ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
       run: python telegram_alerts.py
