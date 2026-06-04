@@ -100,28 +100,38 @@ def test_alpaca():
     except Exception as e:
         return False, f"فشل: {str(e)}"
 
-def cancel_all_orders(client):
-    """إلغاء جميع الأوامر المعلقة"""
+def cleanup_account(client):
+    """تنظيف شامل: إغلاق المراكز + إلغاء الأوامر"""
+    print("🧹 بدء تنظيف الحساب...")
+    
+    # 1. إغلاق جميع المراكز المفتوحة
+    try:
+        positions = client.get_all_positions()
+        if positions:
+            print(f"  إغلاق {len(positions)} مركز مفتوح...")
+            client.close_all_positions(cancel_orders=True)
+            time.sleep(3)
+            print("  ✅ تم إغلاق جميع المراكز")
+        else:
+            print("  لا توجد مراكز مفتوحة")
+    except Exception as e:
+        print(f"  ⚠️ خطأ في إغلاق المراكز: {e}")
+    
+    # 2. إلغاء جميع الأوامر المعلقة
     try:
         orders = client.get_orders(status='open')
-        for order in orders:
-            try:
-                client.cancel_order(order.id)
-            except:
-                pass
         if orders:
+            print(f"  إلغاء {len(orders)} أمر معلق...")
+            client.cancel_all_orders()
             time.sleep(2)
-        return len(orders)
-    except:
-        return 0
+            print("  ✅ تم إلغاء جميع الأوامر")
+        else:
+            print("  لا توجد أوامر معلقة")
+    except Exception as e:
+        print(f"  ⚠️ خطأ في إلغاء الأوامر: {e}")
 
 def execute_trade_with_protection(ticker, side, entry_price):
-    """
-    تنفيذ صفقة بـ 3 أوامر منفصلة:
-    1. أمر دخول (Market)
-    2. انتظار التأكيد
-    3. Stop Loss + Take Profit (GTC)
-    """
+    """تنفيذ صفقة مع تنظيف مسبق"""
     if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
         return None, "مفاتيح Alpaca غير متاحة"
     
@@ -136,6 +146,9 @@ def execute_trade_with_protection(ticker, side, entry_price):
             paper=True
         )
         
+        # تنظيف الحساب أولاً
+        cleanup_account(client)
+        
         # حساب الأسعار
         if side == "buy":
             sl_price = round(entry_price * (1 - STOP_LOSS_PERCENT / 100), 2)
@@ -148,12 +161,7 @@ def execute_trade_with_protection(ticker, side, entry_price):
             sl_side = OrderSide.BUY
             tp_side = OrderSide.BUY
         
-        print(f"🔹 خطوة 1: تنفيذ أمر الدخول لـ {ticker}...")
-        
-        # إلغاء الأوامر المعلقة أولاً
-        cancelled = cancel_all_orders(client)
-        if cancelled > 0:
-            print(f"  تم إلغاء {cancelled} أمر معلق")
+        print(f"🔹 تنفيذ {side} لـ {ticker} بسعر {entry_price}")
         
         # أمر الدخول
         entry_order = MarketOrderRequest(
@@ -163,23 +171,16 @@ def execute_trade_with_protection(ticker, side, entry_price):
             time_in_force=TimeInForce.DAY
         )
         entry_result = client.submit_order(order_data=entry_order)
-        print(f"  ✅ تم إرسال أمر الدخول: {entry_result.id}")
+        print(f"  ✅ أمر الدخول: {entry_result.id}")
         
-        # انتظار تنفيذ الأمر
-        print(f" خطوة 2: انتظار تأكيد التنفيذ...")
+        # انتظار التنفيذ
         time.sleep(5)
         
-        # التحقق من حالة الأمر
+        # التحقق من التنفيذ
         order_status = client.get_order_by_id(entry_result.id)
-        if order_status.status != 'filled':
-            # انتظر أكثر
-            time.sleep(5)
-            order_status = client.get_order_by_id(entry_result.id)
-        
         actual_price = float(order_status.filled_avg_price) if order_status.filled_avg_price else entry_price
-        print(f"  ✅ تم التنفيذ بسعر: ${actual_price:.2f}")
         
-        # إعادة حساب SL/TP بناءً على السعر الفعلي
+        # إعادة حساب SL/TP
         if side == "buy":
             sl_price = round(actual_price * (1 - STOP_LOSS_PERCENT / 100), 2)
             tp_price = round(actual_price * (1 + TAKE_PROFIT_PERCENT / 100), 2)
@@ -187,8 +188,7 @@ def execute_trade_with_protection(ticker, side, entry_price):
             sl_price = round(actual_price * (1 + STOP_LOSS_PERCENT / 100), 2)
             tp_price = round(actual_price * (1 - TAKE_PROFIT_PERCENT / 100), 2)
         
-        # أمر Stop Loss
-        print(f" خطوة 3: وضع وقف الخسارة عند ${sl_price}...")
+        # Stop Loss
         sl_order = StopOrderRequest(
             symbol=ticker,
             qty=TRADE_QTY,
@@ -201,8 +201,7 @@ def execute_trade_with_protection(ticker, side, entry_price):
         
         time.sleep(1)
         
-        # أمر Take Profit
-        print(f"🔹 خطوة 4: وضع جني الأرباح عند ${tp_price}...")
+        # Take Profit
         tp_order = LimitOrderRequest(
             symbol=ticker,
             qty=TRADE_QTY,
@@ -265,7 +264,7 @@ def main():
                     try:
                         last_time = datetime.fromisoformat(last_alerts[alert_key])
                         if (datetime.now() - last_time).total_seconds() < 43200:
-                            print(f"⏭️ تخطي (تنبيه حديث)")
+                            print(f"️ تخطي (تنبيه حديث)")
                             continue
                     except:
                         pass
@@ -308,11 +307,11 @@ def main():
 
 🛡️ <b>الحماية التلقائية:</b>
 🛑 وقف الخسارة: ${trade_result['sl_price']:.2f} (-{STOP_LOSS_PERCENT}%)
- جني الأرباح: ${trade_result['tp_price']:.2f} (+{TAKE_PROFIT_PERCENT}%)
+🎯 جني الأرباح: ${trade_result['tp_price']:.2f} (+{TAKE_PROFIT_PERCENT}%)
 
 🔖 أمر الدخول: {trade_result['entry'].id}
 🛑 Stop Loss: {trade_result['stop_loss'].id}
-🎯 Take Profit: {trade_result['take_profit'].id}
+ Take Profit: {trade_result['take_profit'].id}
 
 ✨ الأوامر معلقة وستنفذ تلقائياً!
 """
@@ -331,7 +330,7 @@ def main():
 🤖 صفقات منفذة: {trades}
 ❌ أخطاء: {errors}
 🔌 Alpaca: {'متصل' if alpaca_ok else 'غير متصل'}
-⚙️ SL={STOP_LOSS_PERCENT}%, TP={TAKE_PROFIT_PERCENT}%
+️ SL={STOP_LOSS_PERCENT}%, TP={TAKE_PROFIT_PERCENT}%
 
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M')}
 """
