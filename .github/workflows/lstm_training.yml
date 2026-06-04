@@ -1,0 +1,38 @@
+name: LSTM Training
+
+on:
+  schedule:
+    # تدريب كل أحد الساعة 3:00 صباحاً (قبل فتح السوق)
+    - cron: '0 3 * * 0'
+  workflow_dispatch:
+
+jobs:
+  train-models:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+    
+    - name: Install dependencies
+      run: |
+        pip install yfinance pandas numpy scikit-learn requests
+    
+    - name: Train LSTM models
+      env:
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      run: python lstm_trainer.py
+    
+    - name: Commit trained models
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add lstm_model.json
+        git commit -m "Update LSTM models" || echo "No changes"
+        git push
