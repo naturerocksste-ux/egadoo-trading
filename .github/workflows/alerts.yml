@@ -12,19 +12,21 @@ jobs:
     
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4  # تحديث إلى v4
     
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5  # تحديث إلى v5
       with:
         python-version: '3.10'
     
     - name: Install dependencies
       run: |
-       pip install yfinance pandas numpy requests alpaca-py
+        pip install yfinance pandas numpy requests alpaca-py
     
     - name: Run alerts script
       env:
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+        ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
       run: python telegram_alerts.py
