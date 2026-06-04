@@ -33,6 +33,9 @@ def send_telegram(message):
 def get_alpaca_data():
     """جلب بيانات الحساب من Alpaca"""
     try:
+        from alpaca.trading.requests import GetOrdersRequest
+        from alpaca.trading.enums import OrderStatus
+        
         client = TradingClient(
             api_key=ALPACA_API_KEY,
             secret_key=ALPACA_SECRET_KEY,
@@ -62,12 +65,15 @@ def get_alpaca_data():
         
         # الأوامر المنفذة خلال الأسبوع الماضي
         last_week = datetime.now() - timedelta(days=7)
-        orders = client.get_orders(
-            status='closed',
+        
+        # ✅ الطريقة الصحيحة للإصدار الحديث
+        orders_filter = GetOrdersRequest(
+            status=OrderStatus.CLOSED,
             limit=100,
             until=datetime.now(),
             after=last_week
         )
+        orders = client.get_orders(filter=orders_filter)
         
         filled_orders = [o for o in orders if o.status == 'filled']
         
@@ -82,7 +88,7 @@ def get_alpaca_data():
         
     except Exception as e:
         return None, str(e)
-
+        
 def analyze_trades(filled_orders):
     """تحليل الصفقات المنفذة"""
     if not filled_orders:
