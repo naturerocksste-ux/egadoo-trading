@@ -953,122 +953,105 @@ with tab4:
     else:
         st.warning("⚠️ سعر الدخول يجب أن يختلف عن وقف الخسارة.")
 
-# ============ التبويب 5: ربط المنصة والتنفيذ التلقائي ============
+# ============ التبويب 5: ربط Alpaca والتنفيذ التلقائي ============
 with tab5:
-    st.markdown("## 🔗 ربط الأداة بمنصة التداول والتنفيذ التلقائي")
+    st.markdown("##  التداول التجريبي مع Alpaca (Paper Trading)")
+    st.markdown("تنفيذ صفقات حقيقية في السوق الأمريكي بأموال افتراضية (100,000$).")
     
     st.markdown("---")
-    st.markdown("### ⚙️ إعدادات API:")
+    st.markdown("### 🔑 إعدادات الاتصال:")
     
     col_api1, col_api2 = st.columns(2)
     with col_api1:
-        broker = st.selectbox("اختر المنصة:", ["Alpaca Markets", "Binance"])
-        api_key = st.text_input("🔑 API Key", type="password", value=st.session_state.get('api_key', ''))
+        api_key = st.text_input("🔑 API Key ID", type="password", value=st.session_state.get('alpaca_api_key', ''))
     with col_api2:
-        api_secret = st.text_input(" API Secret", type="password", value=st.session_state.get('api_secret', ''))
-        test_mode = st.checkbox("🧪 وضع الاختبار (Paper Trading)", value=True)
+        api_secret = st.text_input(" Secret Key", type="password", value=st.session_state.get('alpaca_secret_key', ''))
     
-    if st.button("💾 حفظ والإتصال"):
+    if st.button("💾 حفظ والاتصال"):
         if api_key and api_secret:
-            st.session_state.api_key = api_key
-            st.session_state.api_secret = api_secret
-            st.session_state.api_config = {
-                'broker': broker,
-                'test_mode': test_mode
-            }
-            st.success(f"✅ تم حفظ الإعدادات!")
+            st.session_state.alpaca_api_key = api_key
+            st.session_state.alpaca_secret_key = api_secret
+            st.success("✅ تم حفظ المفاتيح! جاري الاتصال...")
             st.rerun()
         else:
-            st.error("⚠️ يرجى إدخال API Key و API Secret.")
+            st.error("⚠️ يرجى إدخال كلا المفتاحين.")
     
     st.markdown("---")
     
-    # اختبار الاتصال
-    if st.session_state.get('api_key') and st.session_state.get('api_secret'):
-        st.markdown("###  حالة الاتصال:")
-        
-        if st.button("🔄 اختبار الاتصال"):
-            if broker == "Alpaca Markets":
-                client, error = get_alpaca_client(
-                    st.session_state.api_key,
-                    st.session_state.api_secret,
-                    test_mode
-                )
-                
-                if error:
-                    st.error(f"❌ فشل الاتصال: {error}")
-                else:
-                    st.success("✅ تم الاتصال بنجاح!")
-                    
-                    # عرض معلومات الحساب
-                    account_info, acc_error = get_account_info(client)
-                    if account_info:
-                        col_acc1, col_acc2, col_acc3, col_acc4 = st.columns(4)
-                        col_acc1.metric("💰 قيمة المحفظة", f"${account_info['portfolio_value']:,.2f}")
-                        col_acc2.metric("💵 النقد المتاح", f"${account_info['cash']:,.2f}")
-                        col_acc3.metric("📊 حقوق الملكية", f"${account_info['equity']:,.2f}")
-                        col_acc4.metric(" قوة الشراء", f"${account_info['buying_power']:,.2f}")
-                    
-                    st.session_state.alpaca_client = client
-    
-    st.markdown("---")
-    st.markdown("### 🤖 التنفيذ التلقائي:")
-    
-    if st.session_state.get('alpaca_client'):
-        col_exec1, col_exec2, col_exec3, col_exec4 = st.columns(4)
-        
-        with col_exec1:
-            exec_ticker = st.text_input("الرمز", value=st.session_state.selected_ticker)
-        with col_exec2:
-            exec_side = st.selectbox("النوع", ["BUY", "SELL"])
-        with col_exec3:
-            exec_qty = st.number_input("الكمية", min_value=0.01, value=1.0)
-        with col_exec4:
-            exec_type = st.selectbox("نوع الأمر", ["market", "limit"])
-        
-        if exec_type == "limit":
-            st.session_state.limit_price = st.number_input("سعر الحد", min_value=0.01, value=100.0)
-        
-        if st.button("⚡ تنفيذ الصفقة الآن", use_container_width=True):
-            order, error = execute_auto_trade(
-                st.session_state.alpaca_client,
-                exec_ticker,
-                OrderSide.BUY if exec_side == "BUY" else OrderSide.SELL,
-                exec_qty,
-                exec_type
+    # محاولة الاتصال وعرض البيانات
+    if st.session_state.get('alpaca_api_key') and st.session_state.get('alpaca_secret_key'):
+        try:
+            from alpaca.trading.client import TradingClient
+            from alpaca.data import StockHistoricalDataClient
+            from alpaca.trading.requests import MarketOrderRequest
+            from alpaca.trading.enums import OrderSide, TimeInForce
+            
+            # الاتصال بـ Alpaca (paper=True يعني أموال افتراضية)
+            trading_client = TradingClient(
+                api_key=st.session_state.alpaca_api_key,
+                secret_key=st.session_state.alpaca_secret_key,
+                paper=True
             )
             
-            if error:
-                st.error(f"❌ فشل التنفيذ: {error}")
+            # جلب معلومات الحساب
+            account = trading_client.get_account()
+            
+            col_acc1, col_acc2, col_acc3, col_acc4 = st.columns(4)
+            col_acc1.metric("💰 القيمة الكلية", f"${float(account.portfolio_value):,.2f}")
+            col_acc2.metric("💵 النقد المتاح", f"${float(account.cash):,.2f}")
+            col_acc3.metric(" الأرباح/الخسائر", f"${float(account.equity) - 100000:,.2f}")
+            col_acc4.metric("🟢 حالة الحساب", "نشط")
+            
+            st.success("✅ تم الاتصال بنجاح بحساب Paper Trading!")
+            
+            st.markdown("---")
+            st.markdown("### ⚡ تنفيذ صفقة تجريبية:")
+            
+            col_exec1, col_exec2, col_exec3 = st.columns(3)
+            with col_exec1:
+                exec_ticker = st.text_input("رمز السهم (أمريكي فقط)", value="AAPL")
+            with col_exec2:
+                exec_qty = st.number_input("الكمية (عدد الأسهم)", min_value=1.0, value=1.0, step=1.0)
+            with col_exec3:
+                exec_side = st.selectbox("نوع العملية", ["BUY (شراء)", "SELL (بيع)"])
+            
+            if st.button("🚀 تنفيذ الصفقة الآن", use_container_width=True):
+                try:
+                    side = OrderSide.BUY if "BUY" in exec_side else OrderSide.SELL
+                    order_data = MarketOrderRequest(
+                        symbol=exec_ticker.upper(),
+                        qty=exec_qty,
+                        side=side,
+                        time_in_force=TimeInForce.DAY
+                    )
+                    order = trading_client.submit_order(order_data=order_data)
+                    st.success(f"✅ تم تنفيذ الصفقة بنجاح! رقم الطلب: {order.id}")
+                    st.info(f"الحالة: {order.status} | الكمية: {order.qty} | الرمز: {order.symbol}")
+                except Exception as e:
+                    st.error(f"❌ فشل التنفيذ: {str(e)}")
+            
+            st.markdown("---")
+            st.markdown("### 📋 الصفقات المفتوحة حالياً:")
+            positions = trading_client.get_all_positions()
+            if positions:
+                for pos in positions:
+                    st.markdown(f"- **{pos.symbol}**: {pos.qty} سهم | السعر الحالي: ${float(pos.current_price):.2f} | الربح/الخسارة: ${float(pos.unrealized_pl):.2f}")
             else:
-                st.success(f"✅ تم تنفيذ الصفقة! رقم الأمر: {order.id}")
-                st.info(f"الحالة: {order.status} | الكمية: {order.qty} | السعر: {order.filled_avg_price or 'لم يُملأ بعد'}")
+                st.info("لا توجد صفقات مفتوحة حالياً.")
+                
+        except Exception as e:
+            st.error(f"❌ فشل الاتصال بـ Alpaca. تأكد من صحة المفاتيح. الخطأ: {str(e)}")
     else:
-        st.info("💡 اتصل بالمنصة أولاً لتفعيل التنفيذ التلقائي.")
+        st.info("💡 يرجى إدخال مفاتيح API أعلاه للبدء.")
     
     st.markdown("---")
-    st.markdown("###  كيفية الحصول على مفاتيح API:")
-    
-    if broker == "Alpaca Markets":
-        st.markdown("""
-        1. سجل في [Alpaca](https://alpaca.markets) (مجاني 100%)
-        2. اذهب إلى Paper Trading Dashboard
-        3. انسخ API Key و Secret Key
-        4. هذه المنصة مجانية ومثالية للتجربة!
-        5. **مهم:** فعّل صلاحيات "Trading" فقط
-        """)
-    else:
-        st.markdown("""
-        1. سجل في [Binance](https://www.binance.com)
-        2. اذهب إلى Profile > API Management
-        3. أنشئ API Key جديد
-        4. فعّل صلاحيات "Spot Trading" فقط
-        5. انسخ الـ API Key والـ Secret Key
-        """)
-    
-    if test_mode:
-        st.info("💡 أنت في وضع الاختبار. لن يتم استخدام أموال حقيقية.")
-    else:
+    st.markdown("### 📖 ملاحظات مهمة:")
+    st.markdown("""
+    - هذا الحساب يستخدم **أموالاً افتراضية** (100,000$) ولا يمكن سحبها.
+    - الصفقات تُنفذ في **السوق الحقيقي** بأسعار حقيقية.
+    - يدعم فقط **الأسهم الأمريكية** (مثل AAPL, TSLA, NVDA).
+    - إذا أردت إعادة تعيين الحساب، اذهب إلى لوحة تحكم Alpaca واضغط "Reset Paper Account".
+    """)
         st.warning("⚠️ تحذير: وضع التداول الحقيقي سيستخدم أموالك الفعلية!")# ============ التبويب 6: إدارة المخاطر (جديد) ============
 with tab6:
     st.markdown("## 🛡️ إعدادات إدارة المخاطر")
