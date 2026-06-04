@@ -100,38 +100,51 @@ def test_alpaca():
     except Exception as e:
         return False, f"فشل: {str(e)}"
 
-def cleanup_account(client):
-    """تنظيف شامل: إغلاق المراكز + إلغاء الأوامر"""
+def cleanup_account_properly(client):
+    """
+    تنظيف الحساب بالترتيب الصحيح:
+    1. إلغاء الأوامر المعلقة (لتحرير الأسهم المحجوزة)
+    2. إغلاق المراكز المفتوحة
+    """
     print("🧹 بدء تنظيف الحساب...")
     
-    # 1. إغلاق جميع المراكز المفتوحة
-    try:
-        positions = client.get_all_positions()
-        if positions:
-            print(f"  إغلاق {len(positions)} مركز مفتوح...")
-            client.close_all_positions(cancel_orders=True)
-            time.sleep(3)
-            print("  ✅ تم إغلاق جميع المراكز")
-        else:
-            print("  لا توجد مراكز مفتوحة")
-    except Exception as e:
-        print(f"  ⚠️ خطأ في إغلاق المراكز: {e}")
-    
-    # 2. إلغاء جميع الأوامر المعلقة
+    # الخطوة 1: إلغاء جميع الأوامر المعلقة أولاً
+    print("  الخطوة 1: إلغاء الأوامر المعلقة...")
     try:
         orders = client.get_orders(status='open')
         if orders:
-            print(f"  إلغاء {len(orders)} أمر معلق...")
+            print(f"    وجدت {len(orders)} أمر معلق")
             client.cancel_all_orders()
-            time.sleep(2)
-            print("  ✅ تم إلغاء جميع الأوامر")
+            time.sleep(3)  # انتظار مهم لتحرير الأسهم
+            print("    ✅ تم إلغاء جميع الأوامر")
         else:
-            print("  لا توجد أوامر معلقة")
+            print("    لا توجد أوامر معلقة")
     except Exception as e:
-        print(f"  ⚠️ خطأ في إلغاء الأوامر: {e}")
+        print(f"    ️ خطأ في إلغاء الأوامر: {e}")
+    
+    # الخطوة 2: إغلاق جميع المراكز المفتوحة
+    print("  الخطوة 2: إغلاق المراكز المفتوحة...")
+    try:
+        positions = client.get_all_positions()
+        if positions:
+            print(f"    وجدت {len(positions)} مركز مفتوح")
+            for position in positions:
+                try:
+                    client.close_position(position.symbol)
+                    print(f"    ✅ تم إغلاق {position.symbol}")
+                except Exception as e:
+                    print(f"    ⚠️ فشل إغلاق {position.symbol}: {e}")
+            time.sleep(3)
+            print("    ✅ تم إغلاق جميع المراكز")
+        else:
+            print("    لا توجد مراكز مفتوحة")
+    except Exception as e:
+        print(f"    ️ خطأ في إغلاق المراكز: {e}")
+    
+    print("  ✅ اكتمل التنظيف")
 
 def execute_trade_with_protection(ticker, side, entry_price):
-    """تنفيذ صفقة مع تنظيف مسبق"""
+    """تنفيذ صفقة مع تنظيف شامل مسبق"""
     if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
         return None, "مفاتيح Alpaca غير متاحة"
     
@@ -146,8 +159,8 @@ def execute_trade_with_protection(ticker, side, entry_price):
             paper=True
         )
         
-        # تنظيف الحساب أولاً
-        cleanup_account(client)
+        # تنظيف الحساب بالترتيب الصحيح
+        cleanup_account_properly(client)
         
         # حساب الأسعار
         if side == "buy":
@@ -180,7 +193,7 @@ def execute_trade_with_protection(ticker, side, entry_price):
         order_status = client.get_order_by_id(entry_result.id)
         actual_price = float(order_status.filled_avg_price) if order_status.filled_avg_price else entry_price
         
-        # إعادة حساب SL/TP
+        # إعادة حساب SL/TP بناءً على السعر الفعلي
         if side == "buy":
             sl_price = round(actual_price * (1 - STOP_LOSS_PERCENT / 100), 2)
             tp_price = round(actual_price * (1 + TAKE_PROFIT_PERCENT / 100), 2)
@@ -264,7 +277,7 @@ def main():
                     try:
                         last_time = datetime.fromisoformat(last_alerts[alert_key])
                         if (datetime.now() - last_time).total_seconds() < 43200:
-                            print(f"️ تخطي (تنبيه حديث)")
+                            print(f"⏭️ تخطي (تنبيه حديث)")
                             continue
                     except:
                         pass
@@ -302,16 +315,16 @@ def main():
 ✅ <b>تم التنفيذ بنجاح!</b>
 
 📌 الرمز: {ticker}
-💰 سعر الدخول: ${trade_result['actual_price']:.2f}
+ سعر الدخول: ${trade_result['actual_price']:.2f}
 📦 الكمية: {TRADE_QTY}
 
 🛡️ <b>الحماية التلقائية:</b>
-🛑 وقف الخسارة: ${trade_result['sl_price']:.2f} (-{STOP_LOSS_PERCENT}%)
+ وقف الخسارة: ${trade_result['sl_price']:.2f} (-{STOP_LOSS_PERCENT}%)
 🎯 جني الأرباح: ${trade_result['tp_price']:.2f} (+{TAKE_PROFIT_PERCENT}%)
 
 🔖 أمر الدخول: {trade_result['entry'].id}
 🛑 Stop Loss: {trade_result['stop_loss'].id}
- Take Profit: {trade_result['take_profit'].id}
+🎯 Take Profit: {trade_result['take_profit'].id}
 
 ✨ الأوامر معلقة وستنفذ تلقائياً!
 """
@@ -327,10 +340,10 @@ def main():
 📊 <b>ملخص الفحص:</b>
 
 ✅ إشارات: {signals}
-🤖 صفقات منفذة: {trades}
-❌ أخطاء: {errors}
+ صفقات منفذة: {trades}
+ أخطاء: {errors}
 🔌 Alpaca: {'متصل' if alpaca_ok else 'غير متصل'}
-️ SL={STOP_LOSS_PERCENT}%, TP={TAKE_PROFIT_PERCENT}%
+⚙️ SL={STOP_LOSS_PERCENT}%, TP={TAKE_PROFIT_PERCENT}%
 
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M')}
 """
