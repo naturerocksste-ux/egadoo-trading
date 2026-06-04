@@ -114,7 +114,8 @@ def test_alpaca_connection():
 
 def execute_trade_with_sl_tp(ticker, side, entry_price):
     """
-    تنفيذ صفقة مع وقف خسارة وجني أرباح باستخدام 3 أوامر منفصلة
+    تنفيذ صفقة مع وقف خسارة وجني أرباح
+    مع إلغاء الأوامر المعلقة السابقة أولاً
     """
     if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
         return None, "مفاتيح Alpaca غير متاحة"
@@ -130,6 +131,20 @@ def execute_trade_with_sl_tp(ticker, side, entry_price):
             paper=True
         )
         
+        # ✅ الخطوة 1: إلغاء جميع الأوامر المعلقة لهذا السهم
+        print(f"جاري إلغاء الأوامر المعلقة لـ {ticker}...")
+        try:
+            open_orders = client.get_orders(status='open', symbols=[ticker])
+            if open_orders:
+                for order in open_orders:
+                    client.cancel_order(order.id)
+                    print(f"  تم إلغاء أمر: {order.id}")
+                print(f"✅ تم إلغاء {len(open_orders)} أمر معلق")
+            else:
+                print("لا توجد أوامر معلقة")
+        except Exception as e:
+            print(f"⚠️ خطأ في إلغاء الأوامر: {e}")
+        
         # حساب الأسعار
         if side == "buy":
             stop_loss_price = round(entry_price * (1 - STOP_LOSS_PERCENT / 100), 2)
@@ -141,7 +156,7 @@ def execute_trade_with_sl_tp(ticker, side, entry_price):
         print(f"جاري تنفيذ {side} لـ {ticker} بسعر {entry_price}")
         print(f"وقف الخسارة: {stop_loss_price}, جني الأرباح: {take_profit_price}")
         
-        # 1. أمر الشراء/البيع الرئيسي
+        # 2. أمر الشراء/البيع الرئيسي
         entry_order = MarketOrderRequest(
             symbol=ticker,
             qty=TRADE_QTY,
@@ -151,19 +166,19 @@ def execute_trade_with_sl_tp(ticker, side, entry_price):
         entry_result = client.submit_order(order_data=entry_order)
         print(f"✅ تم تنفيذ أمر الدخول: {entry_result.id}")
         
-        # 2. أمر وقف الخسارة
+        # 3. أمر وقف الخسارة
         sl_side = OrderSide.SELL if side == "buy" else OrderSide.BUY
         stop_loss_order = StopOrderRequest(
             symbol=ticker,
             qty=TRADE_QTY,
             side=sl_side,
             stop_price=stop_loss_price,
-            time_in_force=TimeInForce.GTC  # Good Till Cancelled
+            time_in_force=TimeInForce.GTC
         )
         sl_result = client.submit_order(order_data=stop_loss_order)
         print(f"✅ تم وضع وقف الخسارة: {sl_result.id}")
         
-        # 3. أمر جني الأرباح
+        # 4. أمر جني الأرباح
         tp_side = OrderSide.SELL if side == "buy" else OrderSide.BUY
         take_profit_order = LimitOrderRequest(
             symbol=ticker,
@@ -186,7 +201,6 @@ def execute_trade_with_sl_tp(ticker, side, entry_price):
     except Exception as e:
         error_detail = traceback.format_exc()
         return None, f"{str(e)}\n\n{error_detail}"
-
 # ==========================================
 # 5. المحرك الرئيسي
 # ==========================================
