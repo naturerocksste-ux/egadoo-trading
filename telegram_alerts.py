@@ -100,75 +100,14 @@ def test_alpaca():
     except Exception as e:
         return False, f"فشل: {str(e)}"
 
-def cleanup_and_verify(client):
-    """تنظيف شامل مع التحقق من النجاح"""
-    print("🧹 بدء التنظيف الشامل...")
-    
-    # 1. إلغاء جميع الأوامر
-    print("  📋 إلغاء الأوامر المعلقة...")
-    try:
-        orders = client.get_orders(status='open')
-        print(f"    وجدت {len(orders)} أمر معلق")
-        if orders:
-            client.cancel_all_orders()
-            print("    ⏳ انتظار 5 ثوانٍ...")
-            time.sleep(5)
-            
-            # التحقق من الإلغاء
-            remaining_orders = client.get_orders(status='open')
-            if len(remaining_orders) == 0:
-                print("    ✅ تم إلغاء جميع الأوامر بنجاح")
-            else:
-                print(f"    ⚠️ لا تزال {len(remaining_orders)} أوامر معلقة")
-                return False
-        else:
-            print("    ✅ لا توجد أوامر معلقة")
-    except Exception as e:
-        print(f"    ❌ خطأ في إلغاء الأوامر: {e}")
-        return False
-    
-    # 2. إغلاق جميع المراكز
-    print("  📊 إغلاق المراكز المفتوحة...")
-    try:
-        positions = client.get_all_positions()
-        print(f"    وجدت {len(positions)} مركز مفتوح")
-        if positions:
-            for pos in positions:
-                try:
-                    print(f"    🔄 إغلاق {pos.symbol}...")
-                    client.close_position(pos.symbol)
-                    time.sleep(2)
-                    print(f"    ✅ تم إغلاق {pos.symbol}")
-                except Exception as e:
-                    print(f"    ❌ فشل إغلاق {pos.symbol}: {e}")
-            
-            # انتظار إضافي
-            time.sleep(3)
-            
-            # التحقق من الإغلاق
-            remaining_positions = client.get_all_positions()
-            if len(remaining_positions) == 0:
-                print("    ✅ تم إغلاق جميع المراكز بنجاح")
-            else:
-                print(f"    ⚠️ لا تزال {len(remaining_positions)} مراكز مفتوحة")
-                return False
-        else:
-            print("    ✅ لا توجد مراكز مفتوحة")
-    except Exception as e:
-        print(f"    ❌ خطأ في إغلاق المراكز: {e}")
-        return False
-    
-    print("  ✅ اكتمل التنظيف بنجاح!")
-    return True
-
-def execute_trade(ticker, side, entry_price):
-    """تنفيذ صفقة بعد التأكد من نظافة الحساب"""
+def execute_simple_trade(ticker, side, entry_price):
+    """تنفيذ أمر دخول بسيط فقط (بدون Stop Loss/Take Profit تلقائي)"""
     if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
         return None, "مفاتيح Alpaca غير متاحة"
     
     try:
         from alpaca.trading.client import TradingClient
-        from alpaca.trading.requests import MarketOrderRequest, StopOrderRequest, LimitOrderRequest
+        from alpaca.trading.requests import MarketOrderRequest
         from alpaca.trading.enums import OrderSide, TimeInForce
         
         client = TradingClient(
@@ -177,85 +116,30 @@ def execute_trade(ticker, side, entry_price):
             paper=True
         )
         
-        # تنظيف الحساب والتحقق
-        print("🔹 خطوة 1: تنظيف الحساب...")
-        if not cleanup_and_verify(client):
-            return None, "فشل تنظيف الحساب. يرجى التنظيف يدوياً من Alpaca Dashboard."
-        
-        # حساب الأسعار
+        # حساب أسعار مرجعية للرسالة فقط
         if side == "buy":
-            sl_price = round(entry_price * (1 - STOP_LOSS_PERCENT / 100), 2)
-            tp_price = round(entry_price * (1 + TAKE_PROFIT_PERCENT / 100), 2)
-            sl_side = OrderSide.SELL
-            tp_side = OrderSide.SELL
+            suggested_sl = round(entry_price * (1 - STOP_LOSS_PERCENT / 100), 2)
+            suggested_tp = round(entry_price * (1 + TAKE_PROFIT_PERCENT / 100), 2)
         else:
-            sl_price = round(entry_price * (1 + STOP_LOSS_PERCENT / 100), 2)
-            tp_price = round(entry_price * (1 - TAKE_PROFIT_PERCENT / 100), 2)
-            sl_side = OrderSide.BUY
-            tp_side = OrderSide.BUY
+            suggested_sl = round(entry_price * (1 + STOP_LOSS_PERCENT / 100), 2)
+            suggested_tp = round(entry_price * (1 - TAKE_PROFIT_PERCENT / 100), 2)
         
-        print(f"🔹 خطوة 2: تنفيذ أمر الدخول لـ {ticker}...")
+        print(f"🔹 تنفيذ {side} لـ {ticker} بسعر {entry_price}")
         
-        # أمر الدخول
-        entry_order = MarketOrderRequest(
+        # أمر دخول بسيط فقط
+        order_data = MarketOrderRequest(
             symbol=ticker,
             qty=TRADE_QTY,
             side=OrderSide.BUY if side == "buy" else OrderSide.SELL,
             time_in_force=TimeInForce.DAY
         )
-        entry_result = client.submit_order(order_data=entry_order)
-        print(f"  ✅ أمر الدخول: {entry_result.id}")
-        
-        # انتظار التنفيذ
-        print("  ⏳ انتظار 5 ثوانٍ...")
-        time.sleep(5)
-        
-        # التحقق من التنفيذ
-        order_status = client.get_order_by_id(entry_result.id)
-        actual_price = float(order_status.filled_avg_price) if order_status.filled_avg_price else entry_price
-        print(f"  ✅ تم التنفيذ بسعر: ${actual_price:.2f}")
-        
-        # إعادة حساب SL/TP
-        if side == "buy":
-            sl_price = round(actual_price * (1 - STOP_LOSS_PERCENT / 100), 2)
-            tp_price = round(actual_price * (1 + TAKE_PROFIT_PERCENT / 100), 2)
-        else:
-            sl_price = round(actual_price * (1 + STOP_LOSS_PERCENT / 100), 2)
-            tp_price = round(actual_price * (1 - TAKE_PROFIT_PERCENT / 100), 2)
-        
-        # Stop Loss
-        print(f"🔹 خطوة 3: وضع Stop Loss عند ${sl_price}...")
-        sl_order = StopOrderRequest(
-            symbol=ticker,
-            qty=TRADE_QTY,
-            side=sl_side,
-            stop_price=sl_price,
-            time_in_force=TimeInForce.GTC
-        )
-        sl_result = client.submit_order(order_data=sl_order)
-        print(f"  ✅ Stop Loss: {sl_result.id}")
-        
-        time.sleep(1)
-        
-        # Take Profit
-        print(f"🔹 خطوة 4: وضع Take Profit عند ${tp_price}...")
-        tp_order = LimitOrderRequest(
-            symbol=ticker,
-            qty=TRADE_QTY,
-            side=tp_side,
-            limit_price=tp_price,
-            time_in_force=TimeInForce.GTC
-        )
-        tp_result = client.submit_order(order_data=tp_order)
-        print(f"  ✅ Take Profit: {tp_result.id}")
+        order = client.submit_order(order_data=order_data)
+        print(f"  ✅ تم التنفيذ: {order.id}")
         
         return {
-            'entry': entry_result,
-            'stop_loss': sl_result,
-            'take_profit': tp_result,
-            'actual_price': actual_price,
-            'sl_price': sl_price,
-            'tp_price': tp_price
+            'order': order,
+            'suggested_sl': suggested_sl,
+            'suggested_tp': suggested_tp
         }, None
         
     except Exception as e:
@@ -267,7 +151,7 @@ def execute_trade(ticker, side, entry_price):
 # ==========================================
 def main():
     print(f"🤖 بدء الفحص - {datetime.now()}")
-    send_telegram(f"🤖 <b>بدء الفحص الشامل...</b>\n {datetime.now().strftime('%H:%M')}")
+    send_telegram(f" <b>بدء الفحص الشامل (Simple Mode)...</b>\n⏰ {datetime.now().strftime('%H:%M')}")
     
     alpaca_ok, alpaca_msg = test_alpaca()
     print(f"Alpaca: {alpaca_msg}")
@@ -326,7 +210,7 @@ def main():
                 if is_strong and ticker in ALPACA_TRADABLE and alpaca_ok:
                     send_telegram(f"🤖 <b>جاري تنفيذ صفقة لـ {ticker}...</b>")
                     
-                    trade_result, error = execute_trade(
+                    trade_result, error = execute_simple_trade(
                         ticker, "buy" if is_buy else "sell", result['price']
                     )
                     
@@ -335,22 +219,22 @@ def main():
                         send_telegram(f"❌ فشل {ticker}:\n{error[:200]}")
                     else:
                         trades += 1
+                        order = trade_result['order']
+                        
                         success = f"""
 ✅ <b>تم التنفيذ بنجاح!</b>
 
 📌 الرمز: {ticker}
-💰 سعر الدخول: ${trade_result['actual_price']:.2f}
+💰 سعر الدخول: ${result['price']:.2f}
 📦 الكمية: {TRADE_QTY}
+🔖 رقم الطلب: {order.id}
 
-🛡️ <b>الحماية التلقائية:</b>
-🛑 وقف الخسارة: ${trade_result['sl_price']:.2f} (-{STOP_LOSS_PERCENT}%)
-🎯 جني الأرباح: ${trade_result['tp_price']:.2f} (+{TAKE_PROFIT_PERCENT}%)
+⚙️ <b>إدارة المخاطر (مقترحة):</b>
+🛑 وقف الخسارة: ${trade_result['suggested_sl']:.2f} (-{STOP_LOSS_PERCENT}%)
+🎯 جني الأرباح: ${trade_result['suggested_tp']:.2f} (+{TAKE_PROFIT_PERCENT}%)
 
- أمر الدخول: {trade_result['entry'].id}
-🛑 Stop Loss: {trade_result['stop_loss'].id}
-🎯 Take Profit: {trade_result['take_profit'].id}
-
-✨ الأوامر معلقة وستنفذ تلقائياً!
+👉 <b>ضع وقف الخسارة وجني الأرباح يدوياً من:</b>
+Alpaca Dashboard → Positions → {ticker}
 """
                         send_telegram(success)
                 
