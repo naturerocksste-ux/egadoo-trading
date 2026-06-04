@@ -120,15 +120,15 @@ def test_alpaca_connection():
 
 def execute_bracket_order(ticker, side, entry_price):
     """
-    تنفيذ Bracket Order مع معالجة أخطاء شاملة
+    تنفيذ Bracket Order بالطريقة الصحيحة
     """
     if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
         return None, "مفاتيح Alpaca غير متاحة"
     
     try:
         from alpaca.trading.client import TradingClient
-        from alpaca.trading.requests import MarketOrderRequest
-        from alpaca.trading.enums import OrderSide, TimeInForce
+        from alpaca.trading.requests import MarketOrderRequest, StopLossRequest, TakeProfitRequest
+        from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
         
         client = TradingClient(
             api_key=ALPACA_API_KEY,
@@ -147,25 +147,16 @@ def execute_bracket_order(ticker, side, entry_price):
         print(f"جاري تنفيذ {side} لـ {ticker} بسعر {entry_price}")
         print(f"وقف الخسارة: {stop_loss_price}, جني الأرباح: {take_profit_price}")
         
-        # إنشاء الأمر الأساسي
+        # ✅ الطريقة الصحيحة: بناء Bracket Order في خطوة واحدة
         order_data = MarketOrderRequest(
             symbol=ticker,
             qty=TRADE_QTY,
             side=OrderSide.BUY if side == "buy" else OrderSide.SELL,
-            time_in_force=TimeInForce.DAY
+            time_in_force=TimeInForce.DAY,
+            order_class=OrderClass.BRACKET,  # مهم جداً!
+            stop_loss=StopLossRequest(stop_price=stop_loss_price),
+            take_profit=TakeProfitRequest(limit_price=take_profit_price)
         )
-        
-        # محاولة إضافة bracket (قد لا تدعم جميع الأصول)
-        try:
-            from alpaca.trading.requests import StopLossRequest, TakeProfitRequest
-            from alpaca.trading.enums import OrderClass
-            
-            order_data.order_class = OrderClass.BRACKET
-            order_data.stop_loss = StopLossRequest(stop_price=stop_loss_price)
-            order_data.take_profit = TakeProfitRequest(limit_price=take_profit_price)
-            print("✅ تم إضافة Bracket Order")
-        except Exception as e:
-            print(f"⚠️ Bracket غير مدعوم، تنفيذ أمر عادي: {e}")
         
         # تنفيذ الأمر
         order = client.submit_order(order_data=order_data)
@@ -174,13 +165,13 @@ def execute_bracket_order(ticker, side, entry_price):
             'order': order,
             'stop_loss': stop_loss_price,
             'take_profit': take_profit_price,
-            'has_bracket': hasattr(order_data, 'order_class') and order_data.order_class is not None
+            'has_bracket': True
         }, None
         
     except Exception as e:
+        import traceback
         error_detail = traceback.format_exc()
         return None, f"{str(e)}\n\n{error_detail}"
-
 # ==========================================
 # 5. المحرك الرئيسي
 # ==========================================
