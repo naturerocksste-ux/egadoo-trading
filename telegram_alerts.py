@@ -7,56 +7,63 @@ import os
 from datetime import datetime
 
 # ==========================================
-# إعدادات تيليجرام (سنملؤها من GitHub Secrets)
+# إعدادات تيليجرام و Alpaca (من GitHub Secrets)
 # ==========================================
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')
+ALPACA_API_KEY = os.environ.get('ALPACA_API_KEY', '')
+ALPACA_SECRET_KEY = os.environ.get('ALPACA_SECRET_KEY', '')
 
 # ==========================================
 # قائمة الأسهم للمراقبة
 # ==========================================
 WATCHLIST = [
     "AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "SPY",
-    "2222.SR", "1120.SR",
-    "COMI.CA",
-    "ADCB.AD", "FAB.AD",
-    "BTC-USD", "ETH-USD",
-    "GC=F", "SI=F", "^GSPC"
+    "BTC-USD", "ETH-USD", "GC=F", "SI=F", "^GSPC"
 ]
 
-# ==========================================
-# ملف لتتبع آخر التنبيهات (لتجنب التكرار)
-# ==========================================
 ALERTS_FILE = "last_alerts.json"
 
 def load_last_alerts():
     if os.path.exists(ALERTS_FILE):
-        with open(ALERTS_FILE, 'r') as f:
-            return json.load(f)
+        with open(ALERTS_FILE, 'r') as f: return json.load(f)
     return {}
 
 def save_last_alerts(data):
-    with open(ALERTS_FILE, 'w') as f:
-        json.dump(data, f)
+    with open(ALERTS_FILE, 'w') as f: json.dump(data, f)
 
 def send_telegram_message(message):
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("❌ مفاتيح تيليجرام غير متاحة")
-        return False
-    
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: return False
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": message,
-        "parse_mode": "HTML"
-    }
-    
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
     try:
         response = requests.post(url, json=payload, timeout=10)
         return response.status_code == 200
+    except: return False
+
+def execute_alpaca_trade(ticker, side, qty):
+    """دالة تنفيذ الصفقة في Alpaca"""
+    if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
+        return None, "مفاتيح Alpaca غير متاحة"
+    
+    try:
+        from alpaca.trading.client import TradingClient
+        from alpaca.trading.requests import MarketOrderRequest
+        from alpaca.trading.enums import OrderSide, TimeInForce
+        
+        # paper=True تعني أموال افتراضية
+        client = TradingClient(api_key=ALPACA_API_KEY, secret_key=ALPACA_SECRET_KEY, paper=True)
+        
+        order_data = MarketOrderRequest(
+            symbol=ticker,
+            qty=qty,
+            side=OrderSide.BUY if side == "buy" else OrderSide.SELL,
+            time_in_force=TimeInForce.DAY
+        )
+        order = client.submit_order(order_data=order_data)
+        return order, None
     except Exception as e:
-        print(f"❌ خطأ في إرسال الرسالة: {e}")
-        return False
+        return None, str(e)
 
 def calculate_rsi(df, period=14):
     delta = df['Close'].diff()
@@ -68,9 +75,7 @@ def calculate_rsi(df, period=14):
 def analyze_stock(ticker):
     try:
         df = yf.Ticker(ticker).history(period="60d", interval="1d")
-        
-        if df.empty or len(df) < 20:
-            return None
+        if df.empty or len(df) < 20: return None
         
         current_price = float(df['Close'].iloc[-1])
         support = float(df['Low'].rolling(window=20).min().iloc[-1])
@@ -83,101 +88,68 @@ def analyze_stock(ticker):
         dist_to_resistance = ((resistance - current_price) / current_price) * 100
         
         signal = None
-        
-        if dist_to_support <= 2.5 and current_rsi < 35:
-            signal = "🟢 شراء قوية"
-        elif dist_to_support <= 3.5 and current_rsi < 40:
-            signal = "🟩 شراء مبدئية"
-        elif dist_to_resistance <= 2.5 and current_rsi > 65:
-            signal = "🔴 بيع قوية"
-        elif dist_to_resistance <= 3.5 and current_rsi > 60:
-            signal = "🟥 بيع مبدئية"
-        
+        # ننفذ الصفقة فقط على الإشارات القوية جداً لتجنب الضوضاء
+        if dist_to_support <= 2.0 and current_rsi < 30:
+            signal = "buy_strong"
+        elif dist_to_resistance <= 2.0 and current_rsi > 70:
+            signal = "sell_strong"
+            
         if signal:
-            return {
-                'ticker': ticker,
-                'price': current_price,
-                'signal': signal,
-                'support': support,
-                'resistance': resistance,
-                'rsi': current_rsi
-            }
-        
+            return {'ticker': ticker, 'price': current_price, 'signal': signal, 'support': support, 'resistance': resistance, 'rsi': current_rsi}
         return None
-        
-    except Exception as e:
-        print(f"️ خطأ في تحليل {ticker}: {e}")
-        return None
+    except: return None
 
 def main():
-    print(f"🤖 بدء فحص الأسواق - {datetime.now()}")
-    
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("❌ مفاتيح تيليجرام غير متاحة. تأكد من إعداد GitHub Secrets.")
+    print(f"🤖 بدء الفحص - {datetime.now()}")
+    if not TELEGRAM_BOT_TOKEN:
+        print("❌ مفاتيح تيليجرام غير متاحة")
         return
     
     last_alerts = load_last_alerts()
     new_alerts = {}
-    alerts_sent = 0
     
     for ticker in WATCHLIST:
         print(f" فحص {ticker}...")
         result = analyze_stock(ticker)
         
         if result:
-            # مفتاح فريد لكل تنبيه (السهم + نوع الإشارة)
             alert_key = f"{ticker}_{result['signal']}"
-            
-            # تحقق إذا كان التنبيه قد أُرسل في آخر 4 ساعات (لتجنب التكرار)
             if alert_key in last_alerts:
                 last_time = datetime.fromisoformat(last_alerts[alert_key])
                 hours_since = (datetime.now() - last_time).total_seconds() / 3600
-                
-                if hours_since < 4:
-                    print(f"⏭️ تم إرسال تنبيه {ticker} مؤخراً، تخطي...")
-                    continue
+                if hours_since < 6: continue # تنبيه كل 6 ساعات لنفس السهم
             
-            # إنشاء رسالة التنبيه
+            # تحديد نوع الرسالة والتنفيذ
+            is_buy = result['signal'] == "buy_strong"
+            action_text = "شراء قوية 🔥" if is_buy else "بيع قوية ⚠️"
+            trade_side = "buy" if is_buy else "sell"
+            
             message = f"""
- <b>تنبيه تداول جديد!</b>
+🚨 <b>إشارة {action_text} + تنفيذ تلقائي!</b>
 
 📌 <b>{result['ticker']}</b>
-💰 السعر الحالي: ${result['price']:.2f}
-{result['signal']}
+💰 السعر: ${result['price']:.2f}
+📊 RSI: {result['rsi']:.1f}
 
-📊 التفاصيل:
-• الدعم: ${result['support']:.2f}
-• المقاومة: ${result['resistance']:.2f}
-• RSI: {result['rsi']:.1f}
-
-⏰ {datetime.now().strftime('%Y-%m-%d %H:%M')}
+🤖 <b>جاري تنفيذ الصفقة في Alpaca...</b>
 """
             
-            # إرسال التنبيه
-            if send_telegram_message(message):
-                print(f"✅ تم إرسال تنبيه {ticker}")
-                new_alerts[alert_key] = datetime.now().isoformat()
-                alerts_sent += 1
+            # إرسال التنبيه أولاً
+            send_telegram_message(message)
+            
+            # تنفيذ الصفقة (كمية صغيرة للتجربة: سهم واحد)
+            order, error = execute_alpaca_trade(result['ticker'], trade_side, 1)
+            
+            if error:
+                send_telegram_message(f"❌ فشل تنفيذ {result['ticker']}: {error}")
             else:
-                print(f"❌ فشل إرسال تنبيه {ticker}")
+                send_telegram_message(f"✅ <b>تم تنفيذ صفقة {result['ticker']} بنجاح!</b>\nرقم الطلب: {order.id}\nالكمية: {order.qty}")
+            
+            new_alerts[alert_key] = datetime.now().isoformat()
     
-    # حفظ التنبيهات الجديدة
     if new_alerts:
         save_last_alerts(new_alerts)
-    
-    print(f"\n📊 ملخص: تم إرسال {alerts_sent} تنبيه")
-    
-    # إرسال ملخص إذا لم تكن هناك تنبيهات (كل 24 ساعة)
-    if alerts_sent == 0:
-        summary_msg = f"""
-✅ <b>تقرير دوري - لا توجد إشارات قوية</b>
-
-تم فحص {len(WATCHLIST)} سهم/أصل.
-لا توجد إشارات شراء أو بيع قوية حالياً.
-
-⏰ {datetime.now().strftime('%Y-%m-%d %H:%M')}
-"""
-        send_telegram_message(summary_msg)
+    print("✅ انتهى الفحص")
 
 if __name__ == "__main__":
     main()
