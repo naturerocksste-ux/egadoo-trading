@@ -954,8 +954,9 @@ with tab4:
         st.warning("⚠️ سعر الدخول يجب أن يختلف عن وقف الخسارة.")
 
 # ============ التبويب 5: ربط Alpaca والتنفيذ التلقائي ============
+# ============ التبويب 5: ربط Alpaca والتنفيذ التلقائي ============
 with tab5:
-    st.markdown("##  التداول التجريبي مع Alpaca (Paper Trading)")
+    st.markdown("## 🤖 التداول التجريبي مع Alpaca (Paper Trading)")
     st.markdown("تنفيذ صفقات حقيقية في السوق الأمريكي بأموال افتراضية (100,000$).")
     
     st.markdown("---")
@@ -963,9 +964,9 @@ with tab5:
     
     col_api1, col_api2 = st.columns(2)
     with col_api1:
-        api_key = st.text_input("🔑 API Key ID", type="password", value=st.session_state.get('alpaca_api_key', ''))
+        api_key = st.text_input(" API Key ID", type="password", value=st.session_state.get('alpaca_api_key', ''))
     with col_api2:
-        api_secret = st.text_input(" Secret Key", type="password", value=st.session_state.get('alpaca_secret_key', ''))
+        api_secret = st.text_input("🔐 Secret Key", type="password", value=st.session_state.get('alpaca_secret_key', ''))
     
     if st.button("💾 حفظ والاتصال"):
         if api_key and api_secret:
@@ -982,7 +983,6 @@ with tab5:
     if st.session_state.get('alpaca_api_key') and st.session_state.get('alpaca_secret_key'):
         try:
             from alpaca.trading.client import TradingClient
-            from alpaca.data import StockHistoricalDataClient
             from alpaca.trading.requests import MarketOrderRequest
             from alpaca.trading.enums import OrderSide, TimeInForce
             
@@ -999,7 +999,7 @@ with tab5:
             col_acc1, col_acc2, col_acc3, col_acc4 = st.columns(4)
             col_acc1.metric("💰 القيمة الكلية", f"${float(account.portfolio_value):,.2f}")
             col_acc2.metric("💵 النقد المتاح", f"${float(account.cash):,.2f}")
-            col_acc3.metric(" الأرباح/الخسائر", f"${float(account.equity) - 100000:,.2f}")
+            col_acc3.metric("📈 الأرباح/الخسائر", f"${float(account.equity) - 100000:,.2f}")
             col_acc4.metric("🟢 حالة الحساب", "نشط")
             
             st.success("✅ تم الاتصال بنجاح بحساب Paper Trading!")
@@ -1045,16 +1045,17 @@ with tab5:
         st.info("💡 يرجى إدخال مفاتيح API أعلاه للبدء.")
     
     st.markdown("---")
-    st.markdown("### 📖 ملاحظات مهمة:")
+    st.markdown("###  ملاحظات مهمة:")
     st.markdown("""
     - هذا الحساب يستخدم **أموالاً افتراضية** (100,000$) ولا يمكن سحبها.
     - الصفقات تُنفذ في **السوق الحقيقي** بأسعار حقيقية.
     - يدعم فقط **الأسهم الأمريكية** (مثل AAPL, TSLA, NVDA).
     - إذا أردت إعادة تعيين الحساب، اذهب إلى لوحة تحكم Alpaca واضغط "Reset Paper Account".
     """)
-        st.warning("⚠️ تحذير: وضع التداول الحقيقي سيستخدم أموالك الفعلية!")# ============ التبويب 6: إدارة المخاطر (جديد) ============
+
+# ============ التبويب 6: إدارة المخاطر ============
 with tab6:
-    st.markdown("## 🛡️ إعدادات إدارة المخاطر")
+    st.markdown("## ️ إعدادات إدارة المخاطر")
     st.markdown("تخصيص حدود الحماية حسب استراتيجية التداول الخاصة بك.")
     
     st.markdown("---")
@@ -1086,7 +1087,7 @@ with tab6:
             help="يجب أن يكون حجم التداول أعلى من هذا المضاعف لتأكيد الإشارة"
         )
     
-    if st.button(" حفظ إعدادات المخاطر", use_container_width=True):
+    if st.button("💾 حفظ إعدادات المخاطر", use_container_width=True):
         st.session_state.risk_config = {
             'daily_loss_limit': daily_loss_limit,
             'max_consecutive_losses': max_consecutive_losses,
@@ -1101,16 +1102,31 @@ with tab6:
     
     col_status1, col_status2 = st.columns(2)
     with col_status1:
+        # نحتاج لإعادة حساب هذه القيم للعرض
+        daily_loss = st.session_state.portfolio.get('daily_loss', 0)
+        capital = st.session_state.portfolio.get('balance', 10000)
+        daily_loss_pct = (daily_loss / capital) * 100 if capital > 0 else 0
+        is_blocked_daily = daily_loss_pct >= daily_loss_limit
+        
         if is_blocked_daily:
-            st.error(f"🚨 حد الخسارة اليومي مفعّل ({daily_loss_pct:.2f}% / {daily_limit}%)")
+            st.error(f"🚨 حد الخسارة اليومي مفعّل ({daily_loss_pct:.2f}% / {daily_loss_limit}%)")
         else:
-            st.success(f"✅ الخسارة اليومية آمنة ({daily_loss_pct:.2f}% / {daily_limit}%)")
+            st.success(f"✅ الخسارة اليومية آمنة ({daily_loss_pct:.2f}% / {daily_loss_limit}%)")
     
     with col_status2:
+        trades = st.session_state.portfolio.get('trades', [])
+        consecutive = 0
+        for trade in reversed(trades):
+            if trade.get('result') == 'loss':
+                consecutive += 1
+            else:
+                break
+        is_blocked_losses = consecutive >= max_consecutive_losses
+        
         if is_blocked_losses:
-            st.error(f" تم إيقاف التداول ({consecutive_losses} خسائر متتالية)")
+            st.error(f" تم إيقاف التداول ({consecutive} خسائر متتالية)")
         else:
-            st.success(f"✅ لا يوجد حظر ({consecutive_losses} خسائر متتالية)")
+            st.success(f"✅ لا يوجد حظر ({consecutive} خسائر متتالية)")
     
     st.markdown("---")
     st.markdown("### 💡 نصائح إدارة المخاطر:")
