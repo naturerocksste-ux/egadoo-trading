@@ -6,7 +6,7 @@ import os
 from datetime import datetime
 
 # ==========================================
-# 1. الإعدادات والمفاتيح (من GitHub Secrets)
+# 1. الإعدادات والمفاتيح
 # ==========================================
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '')
@@ -14,24 +14,29 @@ ALPACA_API_KEY = os.environ.get('ALPACA_API_KEY', '')
 ALPACA_SECRET_KEY = os.environ.get('ALPACA_SECRET_KEY', '')
 
 # ==========================================
-# 2. قوائم المراقبة والتنفيذ
+# 2. إعدادات إدارة المخاطر (قابلة للتعديل)
 # ==========================================
-# قائمة المراقبة الشاملة (لإرسال التنبيهات)
+STOP_LOSS_PERCENT = 3.0    # وقف الخسارة: 3%
+TAKE_PROFIT_PERCENT = 6.0  # جني الأرباح: 6%
+TRADE_QTY = 1              # عدد الأسهم في كل صفقة
+
+# ==========================================
+# 3. قوائم المراقبة
+# ==========================================
 GLOBAL_WATCHLIST = [
-    "AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "SPY",  # أمريكي
-    "2222.SR", "1120.SR",                            # سعودي
-    "ADCB.AD", "FAB.AD",                            # إماراتي
-    "BTC-USD", "ETH-USD",                           # عملات رقمية
-    "GC=F", "SI=F"                                  # معادن
+    "AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "SPY",
+    "2222.SR", "1120.SR",
+    "ADCB.AD", "FAB.AD",
+    "BTC-USD", "ETH-USD",
+    "GC=F", "SI=F"
 ]
 
-# الأصول القابلة للتنفيذ التلقائي في Alpaca (أمريكي + كريبتو فقط)
 ALPACA_TRADABLE = ["AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "SPY", "BTC-USD", "ETH-USD"]
 
 ALERTS_FILE = "last_alerts.json"
 
 # ==========================================
-# 3. الدوال المساعدة
+# 4. الدوال المساعدة
 # ==========================================
 def send_telegram_message(message):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: return False
@@ -68,12 +73,10 @@ def analyze_stock(ticker):
         dist_to_resistance = ((resistance - current_price) / current_price) * 100
         
         signal = None
-        # شروط قوية جداً للتنفيذ التلقائي
         if dist_to_support <= 2.5 and current_rsi < 35:
             signal = "STRONG_BUY"
         elif dist_to_resistance <= 2.5 and current_rsi > 65:
             signal = "STRONG_SELL"
-        # شروط متوسطة للتنبيه فقط
         elif dist_to_support <= 4.0 and current_rsi < 40:
             signal = "BUY_WATCH"
         elif dist_to_resistance <= 4.0 and current_rsi > 60:
@@ -89,36 +92,60 @@ def analyze_stock(ticker):
         print(f"خطأ في تحليل {ticker}: {e}")
         return None
 
-def execute_alpaca_trade(ticker, side):
-    """تنفيذ الصفقة في Alpaca (Paper Trading فقط)"""
+def execute_bracket_order(ticker, side, entry_price):
+    """
+    تنفيذ أمر Bracket (شراء + وقف خسارة + جني أرباح)
+    """
     if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
         return None, "مفاتيح Alpaca غير متاحة"
     
     try:
         from alpaca.trading.client import TradingClient
-        from alpaca.trading.requests import MarketOrderRequest
-        from alpaca.trading.enums import OrderSide, TimeInForce
+        from alpaca.trading.requests import MarketOrderRequest, StopLossRequest, TakeProfitRequest
+        from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
         
-        # paper=True تعني أموال افتراضية 100%
-        client = TradingClient(api_key=ALPACA_API_KEY, secret_key=ALPACA_SECRET_KEY, paper=True)
+        client = TradingClient(
+            api_key=ALPACA_API_KEY, 
+            secret_key=ALPACA_SECRET_KEY, 
+            paper=True
+        )
         
+        # حساب أسعار وقف الخسارة وجني الأرباح
+        if side == "buy":
+            stop_loss_price = round(entry_price * (1 - STOP_LOSS_PERCENT / 100), 2)
+            take_profit_price = round(entry_price * (1 + TAKE_PROFIT_PERCENT / 100), 2)
+        else:  # sell
+            stop_loss_price = round(entry_price * (1 + STOP_LOSS_PERCENT / 100), 2)
+            take_profit_price = round(entry_price * (1 - TAKE_PROFIT_PERCENT / 100), 2)
+        
+        # إنشاء أمر Bracket
         order_data = MarketOrderRequest(
             symbol=ticker,
-            qty=1,  # سهم واحد أو عملة واحدة للأمان
+            qty=TRADE_QTY,
             side=OrderSide.BUY if side == "buy" else OrderSide.SELL,
-            time_in_force=TimeInForce.DAY
+            time_in_force=TimeInForce.DAY,
+            order_class=OrderClass.BRACKET,
+            stop_loss=StopLossRequest(stop_price=stop_loss_price),
+            take_profit=TakeProfitRequest(limit_price=take_profit_price)
         )
+        
         order = client.submit_order(order_data=order_data)
-        return order, None
+        
+        return {
+            'order': order,
+            'stop_loss': stop_loss_price,
+            'take_profit': take_profit_price
+        }, None
+        
     except Exception as e:
         return None, str(e)
 
 # ==========================================
-# 4. المحرك الرئيسي
+# 5. المحرك الرئيسي
 # ==========================================
 def main():
-    print(f" بدء الفحص الشامل - {datetime.now()}")
-    send_telegram_message(f"🤖 <b>بدء الفحص الشامل للأسواق...</b>\n⏰ {datetime.now().strftime('%H:%M')}")
+    print(f" بدء الفحص - {datetime.now()}")
+    send_telegram_message(f"🤖 <b>بدء الفحص الشامل...</b>\n⏰ {datetime.now().strftime('%H:%M')}")
     
     last_alerts = {}
     if os.path.exists(ALERTS_FILE):
@@ -138,58 +165,34 @@ def main():
             signals_count += 1
             alert_key = f"{ticker}_{result['signal']}"
             
-            # منع تكرار التنبيه لنفس الإشارة خلال 12 ساعة
             if alert_key in last_alerts:
                 try:
                     last_time = datetime.fromisoformat(last_alerts[alert_key])
-                    if (datetime.now() - last_time).total_seconds() < 43200: # 12 ساعة
+                    if (datetime.now() - last_time).total_seconds() < 43200:
                         continue
                 except: pass
             
-            # تحديد نوع الرسالة
             is_buy = "BUY" in result['signal']
             is_strong = "STRONG" in result['signal']
             emoji = "🟢" if is_buy else "🔴"
             action_text = "شراء" if is_buy else "بيع"
-            strength_text = "قوية جداً (تنفيذ تلقائي)" if is_strong else "متوسطة (مراقبة)"
+            strength_text = "قوية جداً" if is_strong else "متوسطة"
             
             message = f"""
 {emoji} <b>إشارة {action_text} {strength_text}!</b>
 
-📌 <b>{result['ticker']}</b>
-💰 السعر: ${result['price']:.2f}
+ <b>{result['ticker']}</b>
+ السعر: ${result['price']:.2f}
 📊 RSI: {result['rsi']:.1f}
 🛡️ الدعم: ${result['support']:.2f}
-🚧 المقاومة: ${result['resistance']:.2f}
+ المقاومة: ${result['resistance']:.2f}
 """
             send_telegram_message(message)
             
-            # التنفيذ التلقائي إذا كانت الإشارة قوية والسهم مدعوم في Alpaca
+            # التنفيذ التلقائي مع وقف الخسارة وجني الأرباح
             if is_strong and ticker in ALPACA_TRADABLE:
-                send_telegram_message(f"🤖 <b>جاري تنفيذ صفقة تلقائية لـ {ticker}...</b>")
-                order, error = execute_alpaca_trade(ticker, "buy" if is_buy else "sell")
+                send_telegram_message(f"🤖 <b>جاري تنفيذ صفقة Bracket لـ {ticker}...</b>")
                 
-                if error:
-                    send_telegram_message(f"❌ فشل التنفيذ: {error}")
-                else:
-                    trades_count += 1
-                    send_telegram_message(f"✅ <b>تم التنفيذ بنجاح!</b>\nالرمز: {ticker}\nالنوع: {'شراء' if is_buy else 'بيع'}\nالكمية: 1")
-            
-            new_alerts[alert_key] = datetime.now().isoformat()
-    
-    # الملخص النهائي
-    summary = f"""
-📊 <b>ملخص الفحص:</b>
-✅ إشارات: {signals_count}
-🤖 صفقات منفذة: {trades_count}
-⏰ {datetime.now().strftime('%Y-%m-%d %H:%M')}
-"""
-    send_telegram_message(summary)
-    
-    if new_alerts:
-        with open(ALERTS_FILE, 'w') as f: json.dump(new_alerts, f)
-    
-    print(f"✅ انتهى الفحص")
-
-if __name__ == "__main__":
-    main()
+                result_trade, error = execute_bracket_order(
+                    ticker, 
+                    "buy
