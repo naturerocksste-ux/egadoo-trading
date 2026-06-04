@@ -4,6 +4,7 @@ import requests
 import json
 import os
 import traceback
+import time
 from datetime import datetime
 
 # ==========================================
@@ -32,7 +33,7 @@ GLOBAL_WATCHLIST = [
     "GC=F", "SI=F"
 ]
 
-# الأسهم الأمريكية فقط (المدعومة في Alpaca Paper Trading)
+# الأسهم الأمريكية فقط (المدعومة في Alpaca)
 ALPACA_TRADABLE = ["AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "SPY"]
 
 ALERTS_FILE = "last_alerts.json"
@@ -112,38 +113,9 @@ def test_alpaca_connection():
     except Exception as e:
         return False, f"فشل الاتصال: {str(e)}"
 
-def cancel_all_open_orders(client, ticker=None):
-    """إلغاء جميع الأوامر المعلقة (للسهم المحدد أو جميع الأسهم)"""
-    try:
-        if ticker:
-            open_orders = client.get_orders(status='open', symbols=[ticker])
-        else:
-            open_orders = client.get_orders(status='open')
-        
-        cancelled_count = 0
-        for order in open_orders:
-            try:
-                client.cancel_order(order.id)
-                cancelled_count += 1
-                print(f"  تم إلغاء أمر: {order.id} ({order.symbol})")
-            except Exception as e:
-                print(f"  فشل إلغاء أمر {order.id}: {e}")
-        
-        if cancelled_count > 0:
-            print(f"✅ تم إلغاء {cancelled_count} أمر معلق")
-            # انتظار قصير للتأكد من معالجة الإلغاء
-            import time
-            time.sleep(2)
-        
-        return cancelled_count
-    except Exception as e:
-        print(f"⚠️ خطأ في إلغاء الأوامر: {e}")
-        return 0
-
 def execute_simple_trade(ticker, side, entry_price):
     """
     تنفيذ أمر دخول بسيط فقط (بدون أوامر معلقة)
-    إدارة المخاطر تتم يدوياً من Alpaca Dashboard
     """
     if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
         return None, "مفاتيح Alpaca غير متاحة"
@@ -166,12 +138,11 @@ def execute_simple_trade(ticker, side, entry_price):
             for order in open_orders:
                 client.cancel_order(order.id)
                 print(f"  تم إلغاء: {order.id}")
-            import time
             time.sleep(2)
         except Exception as e:
             print(f"⚠️ خطأ في الإلغاء: {e}")
         
-        # حساب أسعار مرجعية للرسالة فقط
+        # حساب أسعار مرجعية
         if side == "buy":
             suggested_sl = round(entry_price * (1 - STOP_LOSS_PERCENT / 100), 2)
             suggested_tp = round(entry_price * (1 + TAKE_PROFIT_PERCENT / 100), 2)
@@ -198,16 +169,15 @@ def execute_simple_trade(ticker, side, entry_price):
         }, None
         
     except Exception as e:
-        import traceback
         error_detail = traceback.format_exc()
         return None, f"{str(e)}\n\n{error_detail}"
-        
+
 # ==========================================
 # 5. المحرك الرئيسي
 # ==========================================
 def main():
     print(f"🤖 بدء الفحص - {datetime.now()}")
-    send_telegram_message(f"🤖 <b>بدء الفحص الشامل...</b>\n⏰ {datetime.now().strftime('%H:%M')}")
+    send_telegram_message(f" <b>بدء الفحص الشامل...</b>\n⏰ {datetime.now().strftime('%H:%M')}")
     
     alpaca_ok, alpaca_msg = test_alpaca_connection()
     print(f"حالة Alpaca: {alpaca_msg}")
@@ -242,7 +212,7 @@ def main():
                     try:
                         last_time = datetime.fromisoformat(last_alerts[alert_key])
                         if (datetime.now() - last_time).total_seconds() < 43200:
-                            print(f"️ تخطي {ticker} (تنبيه حديث)")
+                            print(f"⏭️ تخطي {ticker} (تنبيه حديث)")
                             continue
                     except:
                         pass
@@ -266,9 +236,9 @@ def main():
                 
                 # التنفيذ التلقائي
                 if is_strong and ticker in ALPACA_TRADABLE and alpaca_ok:
-                    send_telegram_message(f"🤖 <b>جاري تنفيذ صفقة لـ {ticker}...</b>")
+                    send_telegram_message(f" <b>جاري تنفيذ صفقة لـ {ticker}...</b>")
                     
-                    result_trade, error = execute_trade_with_sl_tp(
+                    result_trade, error = execute_simple_trade(
                         ticker,
                         "buy" if is_buy else "sell",
                         result['price']
@@ -279,22 +249,22 @@ def main():
                         send_telegram_message(f"❌ فشل تنفيذ {ticker}:\n{error[:200]}")
                     else:
                         trades_count += 1
-                        entry = result_trade['entry_order']
-                        sl = result_trade['stop_loss_order']
-                        tp = result_trade['take_profit_order']
+                        order = result_trade['order']
                         
                         success_msg = f"""
 ✅ <b>تم التنفيذ بنجاح!</b>
 
 📌 الرمز: {ticker}
-💰 سعر الدخول: ${result['price']:.2f}
-🛑 وقف الخسارة: ${result_trade['stop_loss']:.2f} (-{STOP_LOSS_PERCENT}%)
-🎯 جني الأرباح: ${result_trade['take_profit']:.2f} (+{TAKE_PROFIT_PERCENT}%)
+ سعر الدخول: ${result['price']:.2f}
 📦 الكمية: {TRADE_QTY}
+🔖 رقم الطلب: {order.id}
 
-🔖 أمر الدخول: {entry.id}
- وقف الخسارة: {sl.id}
-🔖 جني الأرباح: {tp.id}
+⚙️ <b>إدارة المخاطر (مقترحة):</b>
+🛑 وقف الخسارة: ${result_trade['suggested_sl']:.2f} (-{STOP_LOSS_PERCENT}%)
+🎯 جني الأرباح: ${result_trade['suggested_tp']:.2f} (+{TAKE_PROFIT_PERCENT}%)
+
+👉 <b>ضع وقف الخسارة وجني الأرباح يدوياً من:</b>
+Alpaca Dashboard → Positions → {ticker}
 """
                         send_telegram_message(success_msg)
                 
@@ -305,11 +275,11 @@ def main():
             send_telegram_message(f"❌ خطأ في {ticker}:\n{str(e)[:150]}")
     
     summary = f"""
-📊 <b>ملخص الفحص:</b>
+ <b>ملخص الفحص:</b>
 
 ✅ إشارات: {signals_count}
 🤖 صفقات منفذة: {trades_count}
-❌ أخطاء: {errors_count}
+ أخطاء: {errors_count}
 🔌 Alpaca: {'متصل' if alpaca_ok else 'غير متصل'}
 ⚙️ SL={STOP_LOSS_PERCENT}%, TP={TAKE_PROFIT_PERCENT}%
 
