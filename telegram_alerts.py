@@ -32,7 +32,8 @@ GLOBAL_WATCHLIST = [
     "GC=F", "SI=F"
 ]
 
-ALPACA_TRADABLE = ["AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "SPY", "BTC-USD", "ETH-USD"]
+# الأسهم الأمريكية فقط (المدعومة في Alpaca Paper Trading)
+ALPACA_TRADABLE = ["AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "SPY"]
 
 ALERTS_FILE = "last_alerts.json"
 
@@ -40,7 +41,6 @@ ALERTS_FILE = "last_alerts.json"
 # 4. دوال مساعدة
 # ==========================================
 def send_telegram_message(message):
-    """إرسال رسالة تيليجرام مع حماية كاملة"""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("❌ مفاتيح تيليجرام غير متاحة")
         return False
@@ -102,33 +102,27 @@ def analyze_stock(ticker):
         return None
 
 def test_alpaca_connection():
-    """اختبار الاتصال بـ Alpaca"""
     if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
         return False, "مفاتيح Alpaca غير متاحة"
-    
     try:
         from alpaca.trading.client import TradingClient
-        client = TradingClient(
-            api_key=ALPACA_API_KEY,
-            secret_key=ALPACA_SECRET_KEY,
-            paper=True
-        )
+        client = TradingClient(api_key=ALPACA_API_KEY, secret_key=ALPACA_SECRET_KEY, paper=True)
         account = client.get_account()
         return True, f"متصل! الرصيد: ${float(account.cash):,.2f}"
     except Exception as e:
         return False, f"فشل الاتصال: {str(e)}"
 
-def execute_bracket_order(ticker, side, entry_price):
+def execute_trade_with_sl_tp(ticker, side, entry_price):
     """
-    تنفيذ Bracket Order بالطريقة الصحيحة
+    تنفيذ صفقة مع وقف خسارة وجني أرباح باستخدام 3 أوامر منفصلة
     """
     if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
         return None, "مفاتيح Alpaca غير متاحة"
     
     try:
         from alpaca.trading.client import TradingClient
-        from alpaca.trading.requests import MarketOrderRequest, StopLossRequest, TakeProfitRequest
-        from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
+        from alpaca.trading.requests import MarketOrderRequest, StopOrderRequest, LimitOrderRequest
+        from alpaca.trading.enums import OrderSide, TimeInForce
         
         client = TradingClient(
             api_key=ALPACA_API_KEY,
@@ -147,47 +141,64 @@ def execute_bracket_order(ticker, side, entry_price):
         print(f"جاري تنفيذ {side} لـ {ticker} بسعر {entry_price}")
         print(f"وقف الخسارة: {stop_loss_price}, جني الأرباح: {take_profit_price}")
         
-        # ✅ الطريقة الصحيحة: بناء Bracket Order في خطوة واحدة
-        order_data = MarketOrderRequest(
+        # 1. أمر الشراء/البيع الرئيسي
+        entry_order = MarketOrderRequest(
             symbol=ticker,
             qty=TRADE_QTY,
             side=OrderSide.BUY if side == "buy" else OrderSide.SELL,
-            time_in_force=TimeInForce.DAY,
-            order_class=OrderClass.BRACKET,  # مهم جداً!
-            stop_loss=StopLossRequest(stop_price=stop_loss_price),
-            take_profit=TakeProfitRequest(limit_price=take_profit_price)
+            time_in_force=TimeInForce.DAY
         )
+        entry_result = client.submit_order(order_data=entry_order)
+        print(f"✅ تم تنفيذ أمر الدخول: {entry_result.id}")
         
-        # تنفيذ الأمر
-        order = client.submit_order(order_data=order_data)
+        # 2. أمر وقف الخسارة
+        sl_side = OrderSide.SELL if side == "buy" else OrderSide.BUY
+        stop_loss_order = StopOrderRequest(
+            symbol=ticker,
+            qty=TRADE_QTY,
+            side=sl_side,
+            stop_price=stop_loss_price,
+            time_in_force=TimeInForce.GTC  # Good Till Cancelled
+        )
+        sl_result = client.submit_order(order_data=stop_loss_order)
+        print(f"✅ تم وضع وقف الخسارة: {sl_result.id}")
+        
+        # 3. أمر جني الأرباح
+        tp_side = OrderSide.SELL if side == "buy" else OrderSide.BUY
+        take_profit_order = LimitOrderRequest(
+            symbol=ticker,
+            qty=TRADE_QTY,
+            side=tp_side,
+            limit_price=take_profit_price,
+            time_in_force=TimeInForce.GTC
+        )
+        tp_result = client.submit_order(order_data=take_profit_order)
+        print(f"✅ تم وضع جني الأرباح: {tp_result.id}")
         
         return {
-            'order': order,
+            'entry_order': entry_result,
+            'stop_loss_order': sl_result,
+            'take_profit_order': tp_result,
             'stop_loss': stop_loss_price,
-            'take_profit': take_profit_price,
-            'has_bracket': True
+            'take_profit': take_profit_price
         }, None
         
     except Exception as e:
-        import traceback
         error_detail = traceback.format_exc()
         return None, f"{str(e)}\n\n{error_detail}"
+
 # ==========================================
 # 5. المحرك الرئيسي
 # ==========================================
 def main():
     print(f"🤖 بدء الفحص - {datetime.now()}")
+    send_telegram_message(f"🤖 <b>بدء الفحص الشامل...</b>\n⏰ {datetime.now().strftime('%H:%M')}")
     
-    # إرسال رسالة بدء
-    send_telegram_message(f"🤖 <b>بدء الفحص الشامل...</b>\n {datetime.now().strftime('%H:%M')}")
-    
-    # اختبار الاتصال بـ Alpaca
     alpaca_ok, alpaca_msg = test_alpaca_connection()
     print(f"حالة Alpaca: {alpaca_msg}")
     if not alpaca_ok:
         send_telegram_message(f"⚠️ <b>مشكلة في Alpaca:</b>\n{alpaca_msg}")
     
-    # تحميل التنبيهات السابقة
     last_alerts = {}
     if os.path.exists(ALERTS_FILE):
         try:
@@ -212,7 +223,6 @@ def main():
                 
                 alert_key = f"{ticker}_{result['signal']}"
                 
-                # التحقق من التكرار
                 if alert_key in last_alerts:
                     try:
                         last_time = datetime.fromisoformat(last_alerts[alert_key])
@@ -222,7 +232,6 @@ def main():
                     except:
                         pass
                 
-                # إرسال التنبيه
                 is_buy = "BUY" in result['signal']
                 is_strong = "STRONG" in result['signal']
                 emoji = "🟢" if is_buy else "🔴"
@@ -234,7 +243,7 @@ def main():
 
 📌 <b>{result['ticker']}</b>
 💰 السعر: ${result['price']:.2f}
- RSI: {result['rsi']:.1f}
+📊 RSI: {result['rsi']:.1f}
 🛡️ الدعم: ${result['support']:.2f}
 🚧 المقاومة: ${result['resistance']:.2f}
 """
@@ -242,9 +251,9 @@ def main():
                 
                 # التنفيذ التلقائي
                 if is_strong and ticker in ALPACA_TRADABLE and alpaca_ok:
-                    send_telegram_message(f" <b>جاري تنفيذ صفقة لـ {ticker}...</b>")
+                    send_telegram_message(f"🤖 <b>جاري تنفيذ صفقة لـ {ticker}...</b>")
                     
-                    result_trade, error = execute_bracket_order(
+                    result_trade, error = execute_trade_with_sl_tp(
                         ticker,
                         "buy" if is_buy else "sell",
                         result['price']
@@ -255,23 +264,22 @@ def main():
                         send_telegram_message(f"❌ فشل تنفيذ {ticker}:\n{error[:200]}")
                     else:
                         trades_count += 1
-                        order = result_trade['order']
-                        stop_loss = result_trade['stop_loss']
-                        take_profit = result_trade['take_profit']
-                        has_bracket = result_trade['has_bracket']
-                        
-                        bracket_text = "✅ مع وقف خسارة وجني أرباح" if has_bracket else "⚠️ أمر عادي (Bracket غير مدعوم)"
+                        entry = result_trade['entry_order']
+                        sl = result_trade['stop_loss_order']
+                        tp = result_trade['take_profit_order']
                         
                         success_msg = f"""
 ✅ <b>تم التنفيذ بنجاح!</b>
 
 📌 الرمز: {ticker}
 💰 سعر الدخول: ${result['price']:.2f}
-🛑 وقف الخسارة: ${stop_loss:.2f} (-{STOP_LOSS_PERCENT}%)
-🎯 جني الأرباح: ${take_profit:.2f} (+{TAKE_PROFIT_PERCENT}%)
+🛑 وقف الخسارة: ${result_trade['stop_loss']:.2f} (-{STOP_LOSS_PERCENT}%)
+🎯 جني الأرباح: ${result_trade['take_profit']:.2f} (+{TAKE_PROFIT_PERCENT}%)
 📦 الكمية: {TRADE_QTY}
-{bracket_text}
-🔖 رقم الطلب: {order.id}
+
+🔖 أمر الدخول: {entry.id}
+ وقف الخسارة: {sl.id}
+🔖 جني الأرباح: {tp.id}
 """
                         send_telegram_message(success_msg)
                 
@@ -281,7 +289,6 @@ def main():
             print(f"❌ خطأ في معالجة {ticker}: {e}")
             send_telegram_message(f"❌ خطأ في {ticker}:\n{str(e)[:150]}")
     
-    # الملخص النهائي
     summary = f"""
 📊 <b>ملخص الفحص:</b>
 
@@ -295,7 +302,6 @@ def main():
 """
     send_telegram_message(summary)
     
-    # حفظ التنبيهات
     if new_alerts:
         try:
             with open(ALERTS_FILE, 'w') as f:
