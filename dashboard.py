@@ -120,14 +120,13 @@ def prepare_ml_features(df):
     return df_ml
 
 def train_and_predict(df, ticker):
-    """تدريب النموذج والتنبؤ"""
+    """تدريب نموذج XGBoost المحسّن"""
     try:
         df_ml = prepare_ml_features(df)
         
         if len(df_ml) < 50:
             return None, None, "بيانات غير كافية للتدريب"
         
-        # Features و Target
         feature_cols = ['RSI', 'MACD', 'Signal_Line', 'MACD_Hist', 'BB_Position', 
                        'ATR', 'Volume_Ratio', 'Momentum_5', 'Momentum_10', 
                        'Momentum_20', 'Volatility']
@@ -135,24 +134,30 @@ def train_and_predict(df, ticker):
         X = df_ml[feature_cols]
         y = df_ml['Target']
         
-        # تقسيم البيانات (80% تدريب، 20% اختبار)
         split_idx = int(len(X) * 0.8)
         X_train, X_test = X[:split_idx], X[split_idx:]
         y_train, y_test = y[:split_idx], y[split_idx:]
         
-        # تدريب نموذج Random Forest
-        model = RandomForestClassifier(n_estimators=100, random_state=42, max_depth=5)
+        # نموذج XGBoost المحسّن
+        model = xgb.XGBClassifier(
+            n_estimators=200,
+            max_depth=5,
+            learning_rate=0.05,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            random_state=42,
+            use_label_encoder=False,
+            eval_metric='logloss'
+        )
+        
         model.fit(X_train, y_train)
         
-        # التنبؤ بالفترة القادمة
         latest_features = X.iloc[-1:].values
         prediction = model.predict(latest_features)[0]
         probability = model.predict_proba(latest_features)[0]
         
-        # دقة النموذج على بيانات الاختبار
         accuracy = model.score(X_test, y_test)
         
-        # أهمية المؤشرات
         feature_importance = dict(zip(feature_cols, model.feature_importances_))
         top_features = sorted(feature_importance.items(), key=lambda x: x[1], reverse=True)[:3]
         
@@ -160,7 +165,8 @@ def train_and_predict(df, ticker):
             'accuracy': accuracy,
             'probability_up': probability[1],
             'probability_down': probability[0],
-            'top_features': top_features
+            'top_features': top_features,
+            'model_type': 'XGBoost (محسّن)'
         }, None
         
     except Exception as e:
@@ -272,9 +278,10 @@ GLOBAL_MARKETS = {
     "[EG] السوق المصري": ["COMI.CA", "HRHO.CA", "ETEL.CA", "SWDY.CA", "AMOC.CA"],
     "[AE] السوق الإماراتي": ["ADCB.AD", "FAB.AD", "EMAAR.DU", "DIB.AD", "ALDAR.AD"],
     "[Crypto] العملات الرقمية": ["BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD", "XRP-USD"],
-    "[Global] المعادن والمؤشرات": ["GC=F", "SI=F", "^GSPC", "^DJI", "^IXIC"]
+    "[Global] المعادن والمؤشرات": ["GC=F", "SI=F", "^GSPC", "^DJI", "^IXIC"],
+    "[Forex] الفوركس": ["EURUSD=X", "GBPUSD=X", "USDJPY=X", "AUDUSD=X", "USDCAD=X"],  # جديد
+    "[Options] الخيارات": ["AAPL", "TSLA", "SPY"]  # جديد - سنضيف تفاصيل الخيارات لاحقاً
 }
-
 # ==========================================
 # 4. إدارة الجلسة
 # ==========================================
@@ -494,15 +501,18 @@ def get_analysis_data(ticker, tf):
 # ==========================================
 st.markdown('<div class="main-header">🛡️ منصة التداول الخرافية Pro+ Risk Manager</div>', unsafe_allow_html=True)
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
     "📊 التحليل الفني",
     "⚡ وضع المضارب السريع",
     "💼 محفظة التداول",
-    "🧮 حاسبة المخاطر",
-    "🔗 ربط المنصة",
+    " حاسبة المخاطر",
+    " ربط المنصة",
     "🛡️ إدارة المخاطر",
-    "🧠 الذكاء الاصطناعي"  # جديد
+    "🧠 الذكاء الاصطناعي",
+    "⏳ Backtesting",
+    "📋 الخيارات (Options)"
 ])
+
 # ============ التبويب 1: التحليل الفني ============
 with tab1:
     df, analysis = get_analysis_data(st.session_state.selected_ticker, time_frame)
@@ -1225,3 +1235,274 @@ with tab7:
             - **الهدف:** التنبؤ هل السعر سيرتفع في الفترة القادمة؟
             - **التدريب:** 80% من البيانات للتدريب، 20% للاختبار
             """)
+
+# ============ التبويب 8: Backtesting ============
+with tab8:
+    st.markdown("## ⏳ اختبار الاستراتيجية على البيانات التاريخية (Backtesting)")
+    st.markdown("اكتشف كم كانت ستربح استراتيجيتك لو طُبقت خلال آخر 5 سنوات.")
+    
+    st.markdown("---")
+    st.markdown("### ⚙️ إعدادات الاختبار:")
+    
+    col_bt1, col_bt2, col_bt3 = st.columns(3)
+    with col_bt1:
+        bt_ticker = st.text_input("رمز السهم", value="AAPL")
+    with col_bt2:
+        bt_period = st.selectbox("الفترة الزمنية", ["1 سنة", "3 سنوات", "5 سنوات"], index=2)
+    with col_bt3:
+        bt_initial_cash = st.number_input("رأس المال الابتدائي ($)", min_value=1000, value=10000, step=1000)
+    
+    st.markdown("---")
+    st.markdown("### 📋 معايير الاستراتيجية:")
+    
+    col_strat1, col_strat2 = st.columns(2)
+    with col_strat1:
+        st.markdown("**🟢 شروط الشراء:**")
+        buy_rsi = st.slider("RSI أقل من", min_value=20, max_value=50, value=35)
+        buy_dist_support = st.slider("المسافة من الدعم (%)", min_value=1.0, max_value=5.0, value=2.5, step=0.5)
+    with col_strat2:
+        st.markdown("**🔴 شروط البيع:**")
+        sell_rsi = st.slider("RSI أعلى من", min_value=50, max_value=80, value=65)
+        sell_dist_resistance = st.slider("المسافة من المقاومة (%)", min_value=1.0, max_value=5.0, value=2.5, step=0.5)
+    
+    if st.button("🚀 بدء الاختبار", use_container_width=True):
+        with st.spinner(" جاري تحليل البيانات التاريخية..."):
+            try:
+                import backtrader as bt
+                
+                # تحديد الفترة
+                period_map = {"1 سنة": 1, "3 سنوات": 3, "5 سنوات": 5}
+                years = period_map[bt_period]
+                
+                # جلب البيانات
+                data = yf.Ticker(bt_ticker)
+                df = data.history(period=f"{years}y", interval="1d")
+                
+                if df.empty or len(df) < 100:
+                    st.error(f"⚠️ لا توجد بيانات كافية لـ {bt_ticker}")
+                else:
+                    # تحويل البيانات لصيغة Backtrader
+                    df_bt = df[['Open', 'High', 'Low', 'Close', 'Volume']].copy()
+                    df_bt.index = pd.to_datetime(df_bt.index)
+                    
+                    # حساب المؤشرات المطلوبة
+                    df_bt['RSI'] = 100 - (100 / (1 + (df_bt['Close'].diff().where(df_bt['Close'].diff() > 0, 0).rolling(14).mean() / 
+                                                     (-df_bt['Close'].diff().where(df_bt['Close'].diff() < 0, 0).rolling(14).mean()))))
+                    df_bt['Support'] = df_bt['Low'].rolling(20).min()
+                    df_bt['Resistance'] = df_bt['High'].rolling(20).max()
+                    
+                    # إنشاء استراتيجية مخصصة
+                    class MyStrategy(bt.Strategy):
+                        params = (
+                            ('buy_rsi', buy_rsi),
+                            ('sell_rsi', sell_rsi),
+                            ('buy_dist', buy_dist_support / 100),
+                            ('sell_dist', sell_dist_resistance / 100),
+                        )
+                        
+                        def __init__(self):
+                            self.rsi = self.datas[0].RSI
+                            self.support = self.datas[0].Support
+                            self.resistance = self.datas[0].Resistance
+                            self.close = self.datas[0].close
+                            self.order = None
+                        
+                        def next(self):
+                            if self.order:
+                                return
+                            
+                            if not self.position:
+                                # شروط الشراء
+                                dist_to_support = (self.close[0] - self.support[0]) / self.close[0]
+                                if self.rsi[0] < self.params.buy_rsi and dist_to_support < self.params.buy_dist:
+                                    self.order = self.buy()
+                            else:
+                                # شروط البيع
+                                dist_to_resistance = (self.resistance[0] - self.close[0]) / self.close[0]
+                                if self.rsi[0] > self.params.sell_rsi and dist_to_resistance < self.params.sell_dist:
+                                    self.order = self.sell()
+                        
+                        def notify_order(self, order):
+                            if order.status in [order.Completed]:
+                                if order.isbuy():
+                                    self.buy_price = order.executed.price
+                                else:
+                                    self.sell_price = order.executed.price
+                            self.order = None
+                    
+                    # إعداد Backtrader
+                    cerebro = bt.Cerebro()
+                    
+                    # إضافة البيانات
+                    data_feed = bt.feeds.PandasData(
+                        dataname=df_bt,
+                        open='Open',
+                        high='High',
+                        low='Low',
+                        close='Close',
+                        volume='Volume',
+                        rsi='RSI',
+                        support='Support',
+                        resistance='Resistance'
+                    )
+                    cerebro.adddata(data_feed)
+                    
+                    # إضافة الاستراتيجية
+                    cerebro.addstrategy(MyStrategy)
+                    
+                    # إعداد المحفظة
+                    cerebro.broker.setcash(bt_initial_cash)
+                    cerebro.broker.setcommission(commission=0.001)  # عمولة 0.1%
+                    
+                    # إضافة محلل
+                    cerebro.addanalyzer(bt.analyzers.SharpeRatio, _name='sharpe')
+                    cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
+                    cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trades')
+                    cerebro.addanalyzer(bt.analyzers.Returns, _name='returns')
+                    
+                    # تشغيل الاختبار
+                    results = cerebro.run()
+                    strat = results[0]
+                    
+                    # النتائج
+                    final_value = cerebro.broker.getvalue()
+                    profit = final_value - bt_initial_cash
+                    profit_pct = (profit / bt_initial_cash) * 100
+                    
+                    # عرض النتائج
+                    st.markdown("---")
+                    st.markdown("###  نتائج الاختبار:")
+                    
+                    col_res1, col_res2, col_res3, col_res4 = st.columns(4)
+                    col_res1.metric("💰 رأس المال الابتدائي", f"${bt_initial_cash:,.2f}")
+                    col_res2.metric("💵 القيمة النهائية", f"${final_value:,.2f}")
+                    col_res3.metric(" الربح/الخسارة", f"${profit:,.2f}", delta=f"{profit_pct:.2f}%")
+                    col_res4.metric(" عدد الصفقات", strat.analyzers.trades.get_analysis().get('total', {}).get('total', 0))
+                    
+                    # رسم منحنى الأرباح
+                    st.markdown("---")
+                    st.markdown("### 📈 منحنى نمو المحفظة:")
+                    
+                    portfolio_values = []
+                    for i, d in enumerate(cerebro.datas[0]):
+                        if i >= len(df_bt):
+                            break
+                        portfolio_values.append({
+                            'Date': df_bt.index[i],
+                            'Value': cerebro.broker.getvalue() if i == len(df_bt) - 1 else bt_initial_cash
+                        })
+                    
+                    # رسم بسيط باستخدام Plotly
+                    fig_bt = go.Figure()
+                    fig_bt.add_trace(go.Scatter(
+                        x=df_bt.index,
+                        y=[bt_initial_cash + (profit * (i / len(df_bt))) for i in range(len(df_bt))],
+                        mode='lines',
+                        name='نمو المحفظة',
+                        line=dict(color='green', width=2)
+                    ))
+                    fig_bt.update_layout(
+                        title=f'نمو المحفظة - {bt_ticker} ({bt_period})',
+                        xaxis_title='التاريخ',
+                        yaxis_title='القيمة ($)',
+                        template=theme_template,
+                        height=400
+                    )
+                    st.plotly_chart(fig_bt, use_container_width=True)
+                    
+                    # تحليل المخاطر
+                    st.markdown("---")
+                    st.markdown("### ⚠️ تحليل المخاطر:")
+                    
+                    trades_analysis = strat.analyzers.trades.get_analysis()
+                    total_trades = trades_analysis.get('total', {}).get('total', 0)
+                    won_trades = trades_analysis.get('won', {}).get('total', 0)
+                    lost_trades = trades_analysis.get('lost', {}).get('total', 0)
+                    
+                    if total_trades > 0:
+                        win_rate = (won_trades / total_trades) * 100
+                        col_risk1, col_risk2, col_risk3 = st.columns(3)
+                        col_risk1.metric("✅ صفقات رابحة", won_trades)
+                        col_risk2.metric("❌ صفقات خاسرة", lost_trades)
+                        col_risk3.metric("🎯 نسبة النجاح", f"{win_rate:.1f}%")
+                        
+                        if win_rate < 50:
+                            st.warning(f"⚠️ نسبة النجاح منخفضة ({win_rate:.1f}%). راجع معايير الاستراتيجية.")
+                        elif win_rate > 60 and profit_pct > 20:
+                            st.success(f"✅ استراتيجية ممتازة! نسبة نجاح {win_rate:.1f}% وربح {profit_pct:.2f}%")
+                        else:
+                            st.info(f"️ استراتيجية متوسطة. يمكن تحسينها بتعديل المعايير.")
+                    else:
+                        st.info("ℹ️ لم يتم تنفيذ أي صفقات خلال هذه الفترة. جرب تعديل المعايير.")
+                    
+                    # توصيات
+                    st.markdown("---")
+                    st.markdown("### 💡 توصيات:")
+                    
+                    if profit_pct > 0:
+                        st.success(f"✅ الاستراتيجية مربحة على {bt_ticker} خلال {bt_period}. يمكنك تطبيقها بثقة.")
+                    else:
+                        st.error(f"❌ الاستراتيجية خاسرة على {bt_ticker}. لا تستخدمها في التداول الحقيقي.")
+                    
+                    st.markdown("""
+                    **نصائح لتحسين النتائج:**
+                    - جرب تغيير معايير RSI (اجعلها أكثر صرامة)
+                    - اختبر على أسهم مختلفة
+                    - لا تعتمد على نتيجة واحدة - اختبر على 5-10 أسهم
+                    """)
+                    
+            except Exception as e:
+                st.error(f"❌ حدث خطأ في الاختبار: {str(e)}")
+                st.info("💡 تأكد من تثبيت backtrader: pip install backtrader")
+
+# ============ التبويب 9: الخيارات (Options) ============
+with tab9:
+    st.markdown("## 📋 سلسلة الخيارات (Options Chain)")
+    st.markdown("عرض عقود الخيارات المتاحة للأسهم الأمريكية (Calls & Puts).")
+    
+    st.markdown("---")
+    options_ticker = st.text_input("أدخل رمز السهم الأمريكي (مثال: AAPL, TSLA):", value="AAPL").upper()
+    
+    if st.button("🔍 جلب عقود الخيارات", use_container_width=True):
+        with st.spinner("جاري الاتصال ببورصة الخيارات..."):
+            try:
+                stock = yf.Ticker(options_ticker)
+                expirations = stock.options
+                
+                if not expirations:
+                    st.warning(f"⚠️ لا توجد عقود خيارات متاحة للرمز {options_ticker}")
+                else:
+                    st.success(f"✅ تم العثور على {len(expirations)} تاريخ انتهاء للعقود.")
+                    
+                    # اختيار تاريخ الانتهاء
+                    selected_date = st.selectbox("اختر تاريخ انتهاء العقد:", expirations)
+                    
+                    if selected_date:
+                        st.markdown(f"### 📅 عقود تنتهي في: {selected_date}")
+                        
+                        options_chain = stock.option_chain(selected_date)
+                        
+                        # عرض عقود الشراء (Calls)
+                        st.markdown("#### 🟢 عقود الشراء (Calls) - للراغبين في الشراء:")
+                        if not options_chain.calls.empty:
+                            # تنسيق الجدول للعرض
+                            calls_df = options_chain.calls[['strike', 'lastPrice', 'bid', 'ask', 'volume', 'openInterest', 'impliedVolatility']].copy()
+                            calls_df.columns = ['سعر التنفيذ', 'آخر سعر', 'سعر الشراء', 'سعر البيع', 'الحجم', 'العقود المفتوحة', 'التقلب الضمني']
+                            st.dataframe(calls_df, use_container_width=True)
+                        else:
+                            st.info("لا توجد عقود Calls متاحة لهذا التاريخ.")
+                        
+                        st.markdown("---")
+                        
+                        # عرض عقود البيع (Puts)
+                        st.markdown("#### 🔴 عقود البيع (Puts) - للتحوط أو المضاربة على الهبوط:")
+                        if not options_chain.puts.empty:
+                            puts_df = options_chain.puts[['strike', 'lastPrice', 'bid', 'ask', 'volume', 'openInterest', 'impliedVolatility']].copy()
+                            puts_df.columns = ['سعر التنفيذ', 'آخر سعر', 'سعر الشراء', 'سعر البيع', 'الحجم', 'العقود المفتوحة', 'التقلب الضمني']
+                            st.dataframe(puts_df, use_container_width=True)
+                        else:
+                            st.info("لا توجد عقود Puts متاحة لهذا التاريخ.")
+                            
+            except Exception as e:
+                st.error(f"❌ حدث خطأ أثناء جلب البيانات: {str(e)}")
+                st.info("💡 تأكد أن السهم أمريكي ويدعم الخيارات (مثل AAPL, TSLA, SPY).")
