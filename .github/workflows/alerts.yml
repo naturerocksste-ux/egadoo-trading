@@ -20,8 +20,7 @@ jobs:
     
     - name: Install dependencies
       run: |
-        # تثبيت مكتبات التحليل والتنفيذ التلقائي
-        pip install yfinance pandas numpy requests alpaca-py
+        pip install yfinance pandas numpy requests alpaca-py scikit-learn
     
     - name: Run alerts script
       env:
