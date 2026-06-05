@@ -21,12 +21,22 @@ TAKE_PROFIT_PERCENT = 6.0
 TRADE_QTY = 1
 
 GLOBAL_WATCHLIST = [
+    # الأسهم الأمريكية
     "AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "SPY",
-    "2222.SR", "1120.SR", "ADCB.AD", "FAB.AD",
-    "BTC-USD", "ETH-USD", "GC=F", "SI=F"
+    # الأسهم السعودية
+    "2222.SR", "1120.SR",
+    # الأسهم الإماراتية
+    "ADCB.AD", "FAB.AD",
+    # العملات الرقمية
+    "BTC-USD", "ETH-USD",
+    # المعادن
+    "GC=F", "SI=F",
+    # 🆕 الفوركس (أزواج رئيسية)
+    "EURUSD=X", "GBPUSD=X", "USDJPY=X", "AUDUSD=X", "USDCAD=X"
 ]
 
 ALPACA_TRADABLE = ["AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "SPY"]
+# الفوركس يحتاج معالجة خاصة، سنضيفه لاحقاً
 ALERTS_FILE = "last_alerts.json"
 MODEL_FILE = "lstm_model.json"
 
