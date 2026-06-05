@@ -68,7 +68,6 @@ if st.session_state.portfolio.get('last_reset_date') != today:
 GLOBAL_MARKETS = {
     "[US] السوق الأمريكي": ["AAPL", "TSLA", "NVDA", "MSFT", "AMZN", "SPY"],
     "[SA] السوق السعودي": ["2222.SR", "1120.SR", "2010.SR", "1150.SR", "2280.SR"],
-    "[EG] السوق المصري": ["COMI.CA", "HRHO.CA", "ETEL.CA", "SWDY.CA", "AMOC.CA"],
     "[AE] السوق الإماراتي": ["ADCB.AD", "FAB.AD", "EMAAR.DU", "DIB.AD", "ALDAR.AD"],
     "[Crypto] العملات الرقمية": ["BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD", "XRP-USD"],
     "[Global] المعادن والمؤشرات": ["GC=F", "SI=F", "^GSPC", "^DJI", "^IXIC"],
