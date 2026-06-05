@@ -1,11 +1,9 @@
 streamlit
-streamlit-autorefresh
 yfinance
 pandas
 numpy
 plotly
 requests
-Pillow
+openpyxl
 scikit-learn
-xgboost
 alpaca-py
