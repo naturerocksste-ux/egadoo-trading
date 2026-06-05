@@ -1,0 +1,30 @@
+name: Options Scanner
+
+on:
+  schedule:
+    # فحص يومي الساعة 10:00 صباحاً بتوقيت نيويورك (15:00 UTC)
+    - cron: '0 15 * * 1-5'  # من الاثنين للجمعة
+  workflow_dispatch:
+
+jobs:
+  scan-options:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+    
+    - name: Install dependencies
+      run: |
+        pip install yfinance pandas requests
+    
+    - name: Scan options
+      env:
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      run: python options_scanner.py
