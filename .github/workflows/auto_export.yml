@@ -1,0 +1,39 @@
+name: Auto Export to Excel
+
+on:
+  schedule:
+    # تصدير يومي الساعة 6:00 مساءً بتوقيت نيويورك
+    - cron: '0 23 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  export-trades:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+    
+    - name: Install dependencies
+      run: |
+        pip install alpaca-py openpyxl requests yfinance pandas
+    
+    - name: Export trades to Excel
+      env:
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+        ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+      run: python auto_export.py
+    
+    - name: Upload to GitHub
+      uses: actions/upload-artifact@v4
+      with:
+        name: trades-report
+        path: "*.xlsx"
+        retention-days: 7
